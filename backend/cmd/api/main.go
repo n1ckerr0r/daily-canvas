@@ -13,6 +13,7 @@ import (
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/adapters/postgres"
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/artwork"
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/auth"
+	"github.com/n1ckerr0r/dailycanvas/backend/internal/catalog"
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/favorite"
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/platform/config"
 	pgplatform "github.com/n1ckerr0r/dailycanvas/backend/internal/platform/postgres"
@@ -34,6 +35,9 @@ func main() {
 
 	if err := pgplatform.Migrate(ctx, db, cfg.MigrationsDir); err != nil {
 		log.Fatalf("migrate postgres: %v", err)
+	}
+	if err := catalog.Sync(ctx, db, cfg.CatalogPath, cfg.ImagesDir); err != nil {
+		log.Fatalf("sync artwork catalog: %v", err)
 	}
 
 	router := buildRouter(cfg, db)
@@ -62,7 +66,7 @@ func buildRouter(cfg config.Config, db *sql.DB) http.Handler {
 	settingsService := settings.NewService(store)
 	artworkService := artwork.NewService(store, settingsService)
 	favoriteService := favorite.NewService(store)
-	authService := auth.NewService(cfg.Auth)
+	authService := auth.NewService(cfg.Auth, store)
 
 	return httpadapter.NewRouter(
 		cfg,

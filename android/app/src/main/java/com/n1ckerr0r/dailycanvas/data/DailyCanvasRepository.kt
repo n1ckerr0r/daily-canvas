@@ -5,6 +5,10 @@ import com.n1ckerr0r.dailycanvas.data.remote.FavoriteMutationRequestDto
 import com.n1ckerr0r.dailycanvas.data.remote.NetworkModule
 import com.n1ckerr0r.dailycanvas.data.remote.NotificationSettingsPatchDto
 import com.n1ckerr0r.dailycanvas.data.remote.SettingsPatchDto
+import com.n1ckerr0r.dailycanvas.data.remote.LoginRequestDto
+import com.n1ckerr0r.dailycanvas.data.remote.MainViewRequestDto
+import com.n1ckerr0r.dailycanvas.data.remote.RegisterRequestDto
+import com.n1ckerr0r.dailycanvas.data.remote.ChangePasswordRequestDto
 import com.n1ckerr0r.dailycanvas.ui.model.ArtworkCard
 import com.n1ckerr0r.dailycanvas.ui.model.CalendarArtwork
 import com.n1ckerr0r.dailycanvas.ui.model.HomePayload
@@ -15,6 +19,26 @@ import kotlinx.coroutines.withContext
 class DailyCanvasRepository(
     private val api: DailyCanvasApi = NetworkModule.api,
 ) {
+    suspend fun authenticate(email: String, password: String, name: String?, register: Boolean) = withContext(Dispatchers.IO) {
+        val response = if (register) api.register(RegisterRequestDto(email, password, name)) else api.login(LoginRequestDto(email, password))
+        NetworkModule.session.save(response)
+        response.user.email
+    }
+
+    suspend fun logout() = withContext(Dispatchers.IO) {
+        runCatching { api.logout() }
+        NetworkModule.session.clear()
+    }
+
+    suspend fun deleteAccount() = withContext(Dispatchers.IO) {
+        api.deleteAccount()
+        NetworkModule.session.clear()
+    }
+
+    suspend fun changePassword(currentPassword: String, newPassword: String) = withContext(Dispatchers.IO) {
+        api.changePassword(ChangePasswordRequestDto(currentPassword, newPassword))
+        NetworkModule.session.clear()
+    }
     suspend fun loadHome(): HomePayload = withContext(Dispatchers.IO) {
         val main = api.getMain()
         val gallery = api.getGallery().items.map { it.toCard() }
@@ -34,6 +58,10 @@ class DailyCanvasRepository(
 
     suspend fun loadArtwork(artworkId: String): ArtworkCard = withContext(Dispatchers.IO) {
         api.getArtwork(artworkId).toCard()
+    }
+
+    suspend fun markTodayViewed(date: String, artworkId: String) = withContext(Dispatchers.IO) {
+        api.markTodayViewed(MainViewRequestDto(date = date, artworkId = artworkId))
     }
 
     suspend fun loadCalendar(from: String, to: String): List<CalendarArtwork> = withContext(Dispatchers.IO) {

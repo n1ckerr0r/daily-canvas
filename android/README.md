@@ -50,4 +50,6 @@ http://10.0.2.2:37117/api/v1/
 
 ## Note
 
-I could not run a full Android build in this environment because the Android SDK is not configured locally, and the system Gradle in the sandbox fails on a native library. The project structure, wrapper, and configuration are prepared for running it in your Android Studio installation.
+The debug build has been verified locally on the Pixel 8 Android 17 emulator.
+The checked-in Gradle wrapper is the standard wrapper for Gradle 8.14.4; its
+network timeout is extended for slower first-time distribution downloads.

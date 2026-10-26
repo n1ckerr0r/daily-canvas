@@ -9,6 +9,7 @@ type Config struct {
 	AppPort       string
 	WebDir        string
 	ImagesDir     string
+	CatalogPath   string
 	MigrationsDir string
 	Public        Public
 	Auth          Auth
@@ -29,6 +30,7 @@ type Public struct {
 }
 
 type Auth struct {
+	JWTSecret              string
 	TokenType              string
 	AccessTokenTTLSeconds  int
 	RefreshTokenTTLSeconds int
@@ -38,12 +40,14 @@ func Load() Config {
 	return Config{
 		AppPort:       env("APP_PORT", "37117"),
 		WebDir:        env("WEB_DIR", "../frontend"),
-		ImagesDir:     env("IMAGES_DIR", "./storage/images"),
+		ImagesDir:     env("IMAGES_DIR", "../local-data/artworks/images"),
+		CatalogPath:   env("ARTWORK_CATALOG_PATH", "../local-data/artworks/catalog.json"),
 		MigrationsDir: env("MIGRATIONS_DIR", "./migrations"),
 		Public: Public{
 			BaseURL: env("PUBLIC_BASE_URL", "http://localhost:37117"),
 		},
 		Auth: Auth{
+			JWTSecret:              env("AUTH_JWT_SECRET", "change-this-local-development-secret-before-production"),
 			TokenType:              env("AUTH_TOKEN_TYPE", "Bearer"),
 			AccessTokenTTLSeconds:  envInt("AUTH_ACCESS_TOKEN_TTL_SECONDS", 3600),
 			RefreshTokenTTLSeconds: envInt("AUTH_REFRESH_TOKEN_TTL_SECONDS", 2592000),

@@ -26,12 +26,16 @@ services:
       POSTGRES_USER: dailycanvas
       POSTGRES_PASSWORD: dailycanvas
       POSTGRES_SSLMODE: disable
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-development-secret-change-before-deploying}
       WEB_DIR: /app/frontend
       PUBLIC_BASE_URL: http://localhost:37117
-      IMAGES_DIR: /app/backend/storage/images
+      IMAGES_DIR: /app/local-data/artworks/images
+      ARTWORK_CATALOG_PATH: /app/local-data/artworks/catalog.json
       MIGRATIONS_DIR: /app/backend/migrations
     ports:
       - "37117:37117"
+    volumes:
+      - ../local-data/artworks:/app/local-data/artworks:ro
 
 volumes:
   dailycanvas-postgres-data:

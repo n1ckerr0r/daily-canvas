@@ -7,6 +7,7 @@ const state = {
   activeTag: "",
   payload: null,
   detail: null,
+  registerMode: false,
 };
 
 const elements = {
@@ -24,13 +25,23 @@ const elements = {
   tagFilters: document.querySelector("#tag-filters"),
   navButtons: Array.from(document.querySelectorAll(".nav-button")),
   views: Array.from(document.querySelectorAll(".view")),
+  authScreen: document.querySelector("#auth-screen"),
+  authForm: document.querySelector("#auth-form"),
+  authTitle: document.querySelector("#auth-title"),
+  authCopy: document.querySelector("#auth-copy"),
+  authEmail: document.querySelector("#auth-email"),
+  authPassword: document.querySelector("#auth-password"),
+  authError: document.querySelector("#auth-error"),
+  authSubmit: document.querySelector("#auth-submit"),
+  authToggle: document.querySelector("#auth-toggle"),
 };
 
 elements.apiBaseUrl.textContent = apiBaseUrl;
 
 const request = async (path, options = {}) => {
+  const token = sessionStorage.getItem("dailycanvas_access_token");
   const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) },
     ...options,
   });
   if (!response.ok) {
@@ -38,6 +49,35 @@ const request = async (path, options = {}) => {
   }
   return response.json();
 };
+
+const setAuthMode = (registerMode) => {
+  state.registerMode = registerMode;
+  elements.authTitle.textContent = registerMode ? "Создайте аккаунт" : "Войдите в коллекцию";
+  elements.authCopy.textContent = registerMode ? "Избранные и настройки будут храниться в вашем аккаунте." : "Ваши избранные и настройки будут сохранены в аккаунте.";
+  elements.authSubmit.textContent = registerMode ? "Зарегистрироваться" : "Войти";
+  elements.authToggle.textContent = registerMode ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Зарегистрироваться";
+  elements.authError.textContent = "";
+};
+
+const showAuth = (message = "") => { elements.authScreen.classList.add("visible"); elements.authError.textContent = message; };
+const hideAuth = () => elements.authScreen.classList.remove("visible");
+
+elements.authToggle.addEventListener("click", () => setAuthMode(!state.registerMode));
+elements.authForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const email = elements.authEmail.value.trim();
+  const password = elements.authPassword.value;
+  elements.authError.textContent = "";
+  try {
+    const response = await fetch(`${apiBaseUrl}/auth/${state.registerMode ? "register" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || "Не удалось авторизоваться");
+    sessionStorage.setItem("dailycanvas_access_token", payload.accessToken);
+    sessionStorage.setItem("dailycanvas_refresh_token", payload.refreshToken);
+    hideAuth();
+    await refresh();
+  } catch (error) { elements.authError.textContent = error.message || "Не удалось авторизоваться"; }
+});
 
 const render = () => {
   syncViews();
@@ -316,9 +356,12 @@ elements.searchInput.addEventListener("input", (event) => {
   renderGallery();
 });
 
-elements.refreshButton.addEventListener("click", refresh);
+elements.refreshButton.addEventListener("click", () => refresh().catch((error) => showAuth(error.message)));
 
-refresh().catch((error) => {
+if (!sessionStorage.getItem("dailycanvas_access_token")) {
+  showAuth();
+} else refresh().catch((error) => {
+  if (String(error.message).includes("401")) { sessionStorage.clear(); showAuth("Сессия истекла. Войдите снова."); return; }
   elements.heroCard.classList.remove("loading");
   elements.heroCard.innerHTML = `<p class="empty">Не удалось загрузить данные: ${error.message}</p>`;
 });

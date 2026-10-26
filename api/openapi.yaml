@@ -51,7 +51,7 @@ paths:
     get:
       tags: [Main]
       summary: Get artwork calendar
-      description: Returns dates with published daily artworks for the requested date range.
+      description: Returns this user's persisted daily artwork assignments for the requested date range.
       operationId: getCalendar
       parameters:
         - $ref: '#/components/parameters/DateFrom'
@@ -413,6 +413,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [Profile]
+      summary: Delete the current user account
+      operationId: deleteCurrentUser
+      responses:
+        '200':
+          description: Account deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /users/me/password:
+    patch:
+      tags: [Profile]
+      summary: Change the current user's password
+      operationId: changeCurrentUserPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -949,6 +988,10 @@ components:
           format: password
           minLength: 8
           example: StrongPassword123
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
     LoginRequest:
       type: object
       additionalProperties: false
@@ -976,6 +1019,21 @@ components:
           type: string
           format: date-time
           example: '2026-07-02T12:30:00Z'
+        name:
+          type: string
+          example: Анна
+    ChangePasswordRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          format: password
+        newPassword:
+          type: string
+          format: password
+          minLength: 8
     AuthResponse:
       type: object
       additionalProperties: false

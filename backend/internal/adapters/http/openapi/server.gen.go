@@ -168,6 +168,12 @@ type CalendarResponse struct {
 	To    openapi_types.Date `json:"to"`
 }
 
+// ChangePasswordRequest defines model for ChangePasswordRequest.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
 // Collection defines model for Collection.
 type Collection string
 
@@ -299,6 +305,7 @@ type RefreshTokenResponse struct {
 // RegisterRequest defines model for RegisterRequest.
 type RegisterRequest struct {
 	Email    openapi_types.Email `json:"email"`
+	Name     *string             `json:"name,omitempty"`
 	Password string              `json:"password"`
 }
 
@@ -370,6 +377,7 @@ type UserProfile struct {
 	CreatedAt *time.Time          `json:"createdAt,omitempty"`
 	Email     openapi_types.Email `json:"email"`
 	Id        string              `json:"id"`
+	Name      *string             `json:"name,omitempty"`
 }
 
 // ArtworkId defines model for ArtworkId.
@@ -477,6 +485,9 @@ type MarkTodayArtworkViewedJSONRequestBody = MainViewRequest
 // UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
 type UpdateSettingsJSONRequestBody = SettingsPatch
 
+// ChangeCurrentUserPasswordJSONRequestBody defines body for ChangeCurrentUserPassword for application/json ContentType.
+type ChangeCurrentUserPasswordJSONRequestBody = ChangePasswordRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// Get gallery artworks
@@ -530,9 +541,15 @@ type ServerInterface interface {
 	// Get tags
 	// (GET /tags)
 	GetTags(w http.ResponseWriter, r *http.Request)
+	// Delete the current user account
+	// (DELETE /users/me)
+	DeleteCurrentUser(w http.ResponseWriter, r *http.Request)
 	// Get current user profile
 	// (GET /users/me)
 	GetCurrentUser(w http.ResponseWriter, r *http.Request)
+	// Change the current user's password
+	// (PATCH /users/me/password)
+	ChangeCurrentUserPassword(w http.ResponseWriter, r *http.Request)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -641,9 +658,21 @@ func (_ Unimplemented) GetTags(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Delete the current user account
+// (DELETE /users/me)
+func (_ Unimplemented) DeleteCurrentUser(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Get current user profile
 // (GET /users/me)
 func (_ Unimplemented) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Change the current user's password
+// (PATCH /users/me/password)
+func (_ Unimplemented) ChangeCurrentUserPassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1195,6 +1224,26 @@ func (siw *ServerInterfaceWrapper) GetTags(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteCurrentUser operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCurrentUser(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetCurrentUser operation middleware
 func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 
@@ -1206,6 +1255,26 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChangeCurrentUserPassword operation middleware
+func (siw *ServerInterfaceWrapper) ChangeCurrentUserPassword(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangeCurrentUserPassword(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1380,7 +1449,13 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/tags", wrapper.GetTags)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/users/me", wrapper.DeleteCurrentUser)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/users/me", wrapper.GetCurrentUser)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/users/me/password", wrapper.ChangeCurrentUserPassword)
 	})
 
 	return r

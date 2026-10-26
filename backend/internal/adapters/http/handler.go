@@ -2,11 +2,14 @@ package http
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/mail"
 	"time"
 
+	"github.com/lib/pq"
 	openapi "github.com/n1ckerr0r/dailycanvas/backend/internal/adapters/http/openapi"
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/artwork"
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/auth"
@@ -32,7 +35,7 @@ func (h Handler) GetMain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	today, cfg, viewed, err := h.artworks.Main(ctx, currentUser.ID)
+	daily, cfg, viewed, err := h.artworks.Main(ctx, currentUser.ID)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -41,12 +44,14 @@ func (h Handler) GetMain(w http.ResponseWriter, r *http.Request) {
 	message := "Сегодня вас ждет новая картина дня."
 	if viewed {
 		message = "Картина дня уже просмотрена."
+	} else if daily.Exhausted {
+		message = "Вы уже открыли всю выбранную коллекцию. Новая картина появится после пополнения каталога."
 	}
 
 	writeJSON(w, http.StatusOK, openapi.MainResponse{
-		Date:                apiDate(today.PublishedOn),
+		Date:                apiDate(daily.Date),
 		SelectedCollections: stringCollectionsToAPI(cfg.SelectedCollections),
-		TodayArtwork:        artworkToDetail(today),
+		TodayArtwork:        artworkToDetail(daily.Artwork),
 		TodayStatus: openapi.TodayStatus{
 			HasViewedToday: viewed,
 			ShouldNotify:   cfg.Notifications.Enabled,
@@ -140,29 +145,73 @@ func (h Handler) GetArtworkById(w http.ResponseWriter, r *http.Request, artworkI
 }
 
 func (h Handler) LoginUser(w http.ResponseWriter, r *http.Request) {
-	_, _ = decodeJSON[openapi.LoginRequest](r)
-	h.writeAuthResponse(w, r.Context())
+	body, err := decodeJSON[openapi.LoginRequest](r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid login request")
+		return
+	}
+	currentUser, hash, err := h.users.Credentials(r.Context(), string(body.Email))
+	if err != nil || h.auth.CheckPassword(hash, body.Password) != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Invalid email or password")
+		return
+	}
+	h.writeAuthResponse(w, r.Context(), currentUser)
 }
 
 func (h Handler) LogoutUser(w http.ResponseWriter, r *http.Request) {
+	currentUser, err := h.currentUser(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication is required")
+		return
+	}
+	if err := h.auth.Logout(r.Context(), currentUser.ID); err != nil {
+		writeInternalError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, openapi.SuccessResponse{Success: true})
 }
 
 func (h Handler) RegisterUser(w http.ResponseWriter, r *http.Request) {
-	_, _ = decodeJSON[openapi.RegisterRequest](r)
-	h.writeAuthResponse(w, r.Context())
-}
-
-func (h Handler) RefreshAccessToken(w http.ResponseWriter, r *http.Request) {
-	currentUser, err := h.currentUser(r.Context())
+	body, err := decodeJSON[openapi.RegisterRequest](r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid registration request")
+		return
+	}
+	if _, err := mail.ParseAddress(string(body.Email)); err != nil || len(body.Password) < 8 {
+		writeError(w, http.StatusBadRequest, "bad_request", "Provide a valid email and a password of at least 8 characters")
+		return
+	}
+	hash, err := h.auth.HashPassword(body.Password)
 	if err != nil {
 		writeInternalError(w, err)
 		return
 	}
-
-	tokens, err := h.auth.Issue(currentUser)
+	name := ""
+	if body.Name != nil {
+		name = *body.Name
+	}
+	currentUser, err := h.users.Register(r.Context(), string(body.Email), name, hash)
 	if err != nil {
+		var pgErr *pq.Error
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeError(w, http.StatusConflict, "email_taken", "This email is already registered")
+			return
+		}
 		writeInternalError(w, err)
+		return
+	}
+	h.writeAuthResponse(w, r.Context(), currentUser)
+}
+
+func (h Handler) RefreshAccessToken(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeJSON[openapi.RefreshTokenRequest](r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid refresh request")
+		return
+	}
+	tokens, err := h.auth.Refresh(r.Context(), body.RefreshToken, h.users.Get)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_token", "Refresh token is invalid or expired")
 		return
 	}
 
@@ -176,6 +225,12 @@ func (h Handler) RefreshAccessToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) GetCalendar(w http.ResponseWriter, r *http.Request, params openapi.GetCalendarParams) {
+	currentUser, err := h.currentUser(r.Context())
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+
 	from := time.Now().AddDate(0, 0, -14)
 	to := time.Now()
 	if params.From != nil {
@@ -185,7 +240,7 @@ func (h Handler) GetCalendar(w http.ResponseWriter, r *http.Request, params open
 		to = params.To.Time
 	}
 
-	items, err := h.artworks.Calendar(r.Context(), from, to)
+	items, err := h.artworks.Calendar(r.Context(), currentUser.ID, from, to)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -290,6 +345,10 @@ func (h Handler) MarkTodayArtworkViewed(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.artworks.MarkViewed(r.Context(), currentUser.ID, body.ArtworkId, body.Date.Time); err != nil {
+		if errors.Is(err, artwork.ErrNotAssigned) {
+			writeError(w, http.StatusNotFound, "not_assigned", "Artwork is not assigned to this user for this date")
+			return
+		}
 		writeInternalError(w, err)
 		return
 	}
@@ -392,21 +451,69 @@ func (h Handler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		Id:        currentUser.ID,
 		Email:     openapiTypes.Email(currentUser.Email),
 		CreatedAt: &currentUser.CreatedAt,
+		Name:      stringPtr(currentUser.Name),
 	})
 }
 
-func (h Handler) currentUser(ctx context.Context) (user.User, error) {
-	return h.users.Current(ctx)
-}
-
-func (h Handler) writeAuthResponse(w http.ResponseWriter, ctx context.Context) {
-	currentUser, err := h.currentUser(ctx)
+func (h Handler) ChangeCurrentUserPassword(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeJSON[openapi.ChangePasswordRequest](r)
+	if err != nil || len(body.NewPassword) < 8 {
+		writeError(w, http.StatusBadRequest, "bad_request", "New password must contain at least 8 characters")
+		return
+	}
+	currentUser, err := h.currentUser(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication is required")
+		return
+	}
+	_, hash, err := h.users.Credentials(r.Context(), currentUser.Email)
+	if err != nil || h.auth.CheckPassword(hash, body.CurrentPassword) != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Current password is incorrect")
+		return
+	}
+	newHash, err := h.auth.HashPassword(body.NewPassword)
 	if err != nil {
 		writeInternalError(w, err)
 		return
 	}
+	if err := h.users.UpdatePassword(r.Context(), currentUser.ID, newHash); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if err := h.auth.Logout(r.Context(), currentUser.ID); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, openapi.SuccessResponse{Success: true})
+}
 
-	tokens, err := h.auth.Issue(currentUser)
+func (h Handler) DeleteCurrentUser(w http.ResponseWriter, r *http.Request) {
+	currentUser, err := h.currentUser(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication is required")
+		return
+	}
+	if err := h.auth.Logout(r.Context(), currentUser.ID); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if err := h.users.Delete(r.Context(), currentUser.ID); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, openapi.SuccessResponse{Success: true})
+}
+
+func (h Handler) currentUser(ctx context.Context) (user.User, error) {
+	id, ok := userIDFromContext(ctx)
+	if !ok {
+		return user.User{}, sql.ErrNoRows
+	}
+	return h.users.Get(ctx, id)
+}
+
+func (h Handler) writeAuthResponse(w http.ResponseWriter, ctx context.Context, currentUser user.User) {
+	tokens, err := h.auth.Issue(ctx, currentUser)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -422,8 +529,16 @@ func (h Handler) writeAuthResponse(w http.ResponseWriter, ctx context.Context) {
 			Id:        currentUser.ID,
 			Email:     openapiTypes.Email(currentUser.Email),
 			CreatedAt: &currentUser.CreatedAt,
+			Name:      stringPtr(currentUser.Name),
 		},
 	})
+}
+
+func stringPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func decodeJSON[T any](r *http.Request) (T, error) {

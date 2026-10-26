@@ -9,8 +9,28 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface DailyCanvasApi {
+	@POST("auth/login")
+	suspend fun login(@Body request: LoginRequestDto): AuthResponseDto
+
+	@POST("auth/register")
+	suspend fun register(@Body request: RegisterRequestDto): AuthResponseDto
+
+	@POST("auth/token/refresh")
+	suspend fun refresh(@Body request: RefreshTokenRequestDto): RefreshTokenResponseDto
+
+	@POST("auth/logout")
+	suspend fun logout(): SuccessResponseDto
+
+    @DELETE("users/me")
+    suspend fun deleteAccount(): SuccessResponseDto
+
+    @PATCH("users/me/password")
+    suspend fun changePassword(@Body request: ChangePasswordRequestDto): SuccessResponseDto
     @GET("main")
     suspend fun getMain(): MainResponseDto
+
+    @POST("main/view")
+    suspend fun markTodayViewed(@Body request: MainViewRequestDto): MainViewResponseDto
 
     @GET("calendar")
     suspend fun getCalendar(
@@ -47,3 +67,6 @@ interface DailyCanvasApi {
     @GET("tags")
     suspend fun getTags(): TagsResponseDto
 }
+
+@kotlinx.serialization.Serializable
+data class SuccessResponseDto(val success: Boolean)

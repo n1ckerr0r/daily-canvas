@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,6 +30,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
@@ -62,11 +66,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Collections
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -100,6 +110,7 @@ import coil.compose.AsyncImage
 import coil.ImageLoader
 import coil.request.ImageRequest
 import com.n1ckerr0r.dailycanvas.R
+import com.n1ckerr0r.dailycanvas.data.remote.NetworkModule
 import com.n1ckerr0r.dailycanvas.ui.model.ArtworkCard
 import com.n1ckerr0r.dailycanvas.ui.model.ArtworkTag
 import com.n1ckerr0r.dailycanvas.ui.model.CalendarArtwork
@@ -139,13 +150,19 @@ fun DailyCanvasApp(
     val context = LocalContext.current
     val session = remember { context.getSharedPreferences("daily_canvas_session", Context.MODE_PRIVATE) }
     var artworkGridMode by rememberSaveable { mutableStateOf(session.getBoolean("artwork_grid_mode", false)) }
-    var profileEmail by remember { mutableStateOf(session.getString("email", "user@example.com") ?: "user@example.com") }
-    val hasSession = remember { session.getBoolean("signed_in", false) }
+    var profileEmail by remember { mutableStateOf(NetworkModule.session.email ?: "") }
+    val hasSession = remember { NetworkModule.session.hasSession() }
 
     LaunchedEffect(state.error) {
         state.error?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.consumeError()
+        }
+    }
+
+    LaunchedEffect(state.isAuthenticated) {
+        if (!state.isAuthenticated && navController.currentDestination?.route != AppDestination.Auth.route) {
+            navController.navigate(AppDestination.Auth.route) { popUpTo(0) }
         }
     }
 
@@ -158,11 +175,11 @@ fun DailyCanvasApp(
     ) {
         composable(AppDestination.Auth.route) {
             AuthScreen(
-                onContinue = { email ->
-                    profileEmail = email
-                    session.edit().putBoolean("signed_in", true).putString("email", email).apply()
-                    navController.navigate(AppDestination.Home.route) {
-                        popUpTo(AppDestination.Auth.route) { inclusive = true }
+                isLoading = state.isLoading,
+                onContinue = { email, password, name, register ->
+                    viewModel.authenticate(email, password, name, register) { authenticatedEmail ->
+                        profileEmail = authenticatedEmail
+                        navController.navigate(AppDestination.Home.route) { popUpTo(AppDestination.Auth.route) { inclusive = true } }
                     }
                 },
             )
@@ -187,7 +204,7 @@ fun DailyCanvasApp(
                     },
                     onFavoriteToggle = viewModel::toggleFavorite,
                     onTagClick = { tag ->
-                        galleryTag = tag.id
+                      пше  galleryTag = tag.id
                         galleryArtist = null
                         navController.navigate(AppDestination.Gallery.route)
                     },
@@ -305,15 +322,21 @@ fun DailyCanvasApp(
                     profileEmail = profileEmail,
                     onNotificationsChanged = viewModel::updateNotifications,
                     onCollectionsChanged = viewModel::updateCollections,
+                    onPasswordChange = { currentPassword, newPassword ->
+                        viewModel.changePassword(currentPassword, newPassword) {
+                            navController.navigate(AppDestination.Auth.route) { popUpTo(0) }
+                        }
+                    },
                     onBack = { navController.popBackStack() },
                     onLogout = {
-                        session.edit().clear().apply()
-                        navController.navigate(AppDestination.Auth.route) {
-                            popUpTo(0)
+                        viewModel.logout {
+                            navController.navigate(AppDestination.Auth.route) { popUpTo(0) }
                         }
                     },
                     onDeleteAccount = {
-                        Toast.makeText(context, "Удаление аккаунта будет доступно после подключения сервера", Toast.LENGTH_LONG).show()
+                        viewModel.deleteAccount {
+                            navController.navigate(AppDestination.Auth.route) { popUpTo(0) }
+                        }
                     },
                 )
             }
@@ -360,11 +383,16 @@ private fun MainScaffold(
         bottomBar = {
             NavigationBar(containerColor = Color.White) {
                 items.forEach { destination ->
+                    val icon = when (destination) {
+                        AppDestination.Home -> Icons.Default.Home
+                        AppDestination.Gallery -> Icons.Default.Collections
+                        else -> Icons.Default.Favorite
+                    }
                     NavigationBarItem(
                         selected = current.route == destination.route,
                         onClick = { onNavigate(destination) },
                         label = { Text(destination.label) },
-                        icon = { Text(destination.label.take(1)) },
+                        icon = { Icon(icon, contentDescription = destination.label) },
                     )
                 }
             }
@@ -375,7 +403,8 @@ private fun MainScaffold(
 
 @Composable
 private fun AuthScreen(
-    onContinue: (String) -> Unit,
+    isLoading: Boolean,
+    onContinue: (String, String, String?, Boolean) -> Unit,
 ) {
     var registerMode by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
@@ -388,10 +417,23 @@ private fun AuthScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(WarmPaper)
-            .padding(horizontal = 28.dp, vertical = 24.dp),
+            .background(Brush.verticalGradient(listOf(Color(0xFFF7EFE3), Color(0xFFF1E2CF))))
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 28.dp),
         verticalArrangement = Arrangement.Center,
     ) {
+        Row(
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Surface(shape = CircleShape, color = Color(0xFF0A315F), modifier = Modifier.size(48.dp)) {
+                Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Palette, contentDescription = null, tint = Color.White, modifier = Modifier.size(27.dp)) }
+            }
+            Text("DailyCanvas", color = Color(0xFF0A315F), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(32.dp))
         Text(
             text = if (registerMode) "Регистрация" else "Вход",
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -399,7 +441,12 @@ private fun AuthScreen(
             fontSize = 31.sp,
             fontWeight = FontWeight.Bold,
         )
-        Spacer(Modifier.height(24.dp))
+        Text(
+            text = if (registerMode) "Создайте личную коллекцию искусства" else "Продолжите знакомство с искусством",
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp, bottom = 26.dp),
+            color = Color(0xFF6B625B),
+            fontSize = 15.sp,
+        )
         if (registerMode) {
             AuthField("Имя", "Введите ваше имя", name, { name = it })
             Spacer(Modifier.height(12.dp))
@@ -414,8 +461,6 @@ private fun AuthScreen(
                 androidx.compose.material3.Checkbox(checked = acceptedTerms, onCheckedChange = { acceptedTerms = it })
                 Text("Я согласен с условиями и политикой конфиденциальности", fontSize = 13.sp)
             }
-        } else {
-            TextButton(onClick = { error = "Обратитесь в службу поддержки для восстановления пароля" }) { Text("Забыли пароль?") }
         }
         error?.let { Text(it, color = AccentRed, fontSize = 13.sp) }
         Spacer(Modifier.height(12.dp))
@@ -428,11 +473,13 @@ private fun AuthScreen(
                     registerMode && !acceptedTerms -> "Нужно принять условия"
                     else -> null
                 }
-                if (error == null) onContinue(email)
+                if (error == null) onContinue(email, password, name.takeIf { registerMode }, registerMode)
             },
             modifier = Modifier.fillMaxWidth(),
+            enabled = !isLoading,
         ) {
-            Text(if (registerMode) "Зарегистрироваться" else "Войти")
+            if (isLoading) CircularProgressIndicator(modifier = Modifier.size(22.dp), color = Color.White, strokeWidth = 2.dp)
+            else Text(if (registerMode) "Зарегистрироваться" else "Войти")
         }
         Spacer(Modifier.height(16.dp))
         TextButton(onClick = { registerMode = !registerMode }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
@@ -453,7 +500,16 @@ private fun AuthField(label: String, placeholder: String, value: String, onValue
         singleLine = true,
         shape = RoundedCornerShape(13.dp),
         visualTransformation = if (password && !visible) PasswordVisualTransformation() else VisualTransformation.None,
-        trailingIcon = if (password) ({ TextButton(onClick = onToggleVisible) { Text(if (visible) "◉" else "◎") } }) else null,
+        trailingIcon = if (password) ({
+            TextButton(onClick = onToggleVisible, contentPadding = PaddingValues(0.dp)) {
+                AppIcon(
+                    resource = if (visible) R.drawable.ic_visibility_off else R.drawable.ic_visibility,
+                    contentDescription = if (visible) "Скрыть пароль" else "Показать пароль",
+                    modifier = Modifier.size(23.dp),
+                    tint = Color(0xFF5F5B58),
+                )
+            }
+        }) else null,
     )
 }
 
@@ -547,7 +603,12 @@ private fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                 ) {
-                    Text("●", color = Color(0xFF082C58), fontSize = 16.sp)
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF082C58)),
+                    )
                 }
             }
             item {
@@ -586,7 +647,11 @@ private fun HomeScreen(
                             .clickable { onFavoriteToggle(artwork) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(if (artwork.isFavorite) "♥" else "♡", fontSize = 34.sp, color = Color(0xFF172332))
+                        FavoriteIcon(
+                            isFavorite = artwork.isFavorite,
+                            modifier = Modifier.size(30.dp),
+                            tint = if (artwork.isFavorite) AccentRed else Color(0xFF172332),
+                        )
                     }
                 }
             }
@@ -600,11 +665,22 @@ private fun HomeScreen(
                 )
                 if (description.length > 170) {
                     TextButton(onClick = { descriptionExpanded = !descriptionExpanded }) {
-                        Text(
-                            if (descriptionExpanded) "Свернуть  ⌃" else "Показать полностью  ⌄",
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                            if (descriptionExpanded) "Свернуть" else "Показать полностью",
                             color = Color(0xFF082C58),
                             fontSize = 16.sp,
-                        )
+                            )
+                            AppIcon(
+                                resource = if (descriptionExpanded) R.drawable.ic_expand_less else R.drawable.ic_expand_more,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = Color(0xFF082C58),
+                            )
+                        }
                     }
                 }
             }
@@ -673,6 +749,35 @@ private fun SettingsIcon(modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun AppIcon(
+    @DrawableRes resource: Int,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    tint: Color = Color(0xFF172332),
+) {
+    Icon(
+        painter = painterResource(resource),
+        contentDescription = contentDescription,
+        modifier = modifier,
+        tint = tint,
+    )
+}
+
+@Composable
+private fun FavoriteIcon(
+    isFavorite: Boolean,
+    modifier: Modifier = Modifier,
+    tint: Color = Color(0xFF172332),
+) {
+    AppIcon(
+        resource = if (isFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border,
+        contentDescription = if (isFavorite) "Удалить из избранного" else "Добавить в избранное",
+        modifier = modifier,
+        tint = tint,
+    )
+}
+
+@Composable
 private fun ScreenHeader(
     title: String,
     onBack: (() -> Unit)? = null,
@@ -715,12 +820,11 @@ private fun BackButton(onClick: () -> Unit) {
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = "‹",
-            color = Color(0xFF172332),
-            fontSize = 46.sp,
-            lineHeight = 46.sp,
-            fontWeight = FontWeight.Normal,
+        AppIcon(
+            resource = R.drawable.ic_arrow_back,
+            contentDescription = "Назад",
+            modifier = Modifier.size(28.dp),
+            tint = Color(0xFF172332),
         )
     }
 }
@@ -766,7 +870,11 @@ private fun CalendarScreen(
                 val target = month.minusMonths(1)
                 onLoadMonth(target.atDay(1).toString(), target.atEndOfMonth().toString())
             }) {
-                Text("‹", fontSize = 34.sp, color = Color(0xFF172332))
+                AppIcon(
+                    resource = R.drawable.ic_chevron_left,
+                    contentDescription = "Предыдущий месяц",
+                    modifier = Modifier.size(28.dp),
+                )
             }
             Text(
                 month.format(DateTimeFormatter.ofPattern("LLLL yyyy", Locale.forLanguageTag("ru")))
@@ -782,7 +890,12 @@ private fun CalendarScreen(
                     onLoadMonth(target.atDay(1).toString(), target.atEndOfMonth().toString())
                 },
             ) {
-                Text("›", fontSize = 34.sp, color = if (month < YearMonth.now()) Color(0xFF172332) else Color.LightGray)
+                AppIcon(
+                    resource = R.drawable.ic_chevron_right,
+                    contentDescription = "Следующий месяц",
+                    modifier = Modifier.size(28.dp),
+                    tint = if (month < YearMonth.now()) Color(0xFF172332) else Color.LightGray,
+                )
             }
         }
         Row(modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 6.dp)) {
@@ -889,7 +1002,14 @@ private fun CalendarDay(
                     alpha = if (isFuture) 0.28f else 1f,
                 )
             }
-            if (isFuture) Text("🔒", fontSize = 15.sp)
+            if (isFuture) {
+                AppIcon(
+                    resource = R.drawable.ic_lock,
+                    contentDescription = "Будущая дата",
+                    modifier = Modifier.size(17.dp),
+                    tint = Color(0xFF77736F),
+                )
+            }
         }
     }
 }
@@ -931,7 +1051,14 @@ private fun GalleryScreen(
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("Поиск картин, авторов, тегов…") },
-            trailingIcon = { Text("⌕", fontSize = 25.sp) },
+            trailingIcon = {
+                AppIcon(
+                    resource = R.drawable.ic_search,
+                    contentDescription = "Поиск",
+                    modifier = Modifier.size(23.dp),
+                    tint = Color(0xFF5F5B58),
+                )
+            },
             singleLine = true,
             shape = RoundedCornerShape(26.dp),
         )
@@ -1044,7 +1171,17 @@ private fun FavoritesScreen(
         GalleryHeader("Избранное", gridMode, { onGridModeChanged(!gridMode) }, onOpenSettings)
         Box {
             OutlinedButton(onClick = { sortMenuOpen = true }, shape = RoundedCornerShape(18.dp)) {
-                Text("$sortMode  ⌄")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(sortMode)
+                    AppIcon(
+                        resource = R.drawable.ic_expand_more,
+                        contentDescription = "Выбрать сортировку",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
             DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
                 listOf("Недавно добавленные", "По названию", "По автору", "По году").forEach { option ->
@@ -1125,7 +1262,11 @@ private fun GalleryHeader(title: String, gridMode: Boolean, onToggleGrid: () -> 
         Spacer(Modifier.size(44.dp))
         Text(title, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, fontFamily = FontFamily.SansSerif, fontSize = 30.sp, fontWeight = FontWeight.Medium)
         TextButton(onClick = onToggleGrid, modifier = Modifier.size(44.dp), contentPadding = PaddingValues(0.dp)) {
-            Text(if (gridMode) "☷" else "▦", fontSize = 26.sp, color = Color(0xFF172332))
+            AppIcon(
+                resource = if (gridMode) R.drawable.ic_view_list else R.drawable.ic_grid_view,
+                contentDescription = if (gridMode) "Показать списком" else "Показать сеткой",
+                modifier = Modifier.size(24.dp),
+            )
         }
         TextButton(
             onClick = onOpenSettings,
@@ -1192,7 +1333,11 @@ private fun ArtworkGridCard(artwork: ArtworkCard, onOpen: () -> Unit, onFavorite
                     contentPadding = PaddingValues(0.dp),
                     modifier = Modifier.size(36.dp).align(Alignment.BottomEnd),
                 ) {
-                    Text(if (artwork.isFavorite) "♥" else "♡", color = if (artwork.isFavorite) Color(0xFFE33F45) else Color(0xFF777777), fontSize = 27.sp)
+                    FavoriteIcon(
+                        isFavorite = artwork.isFavorite,
+                        modifier = Modifier.size(25.dp),
+                        tint = if (artwork.isFavorite) AccentRed else Color(0xFF777777),
+                    )
                 }
             }
         }
@@ -1206,7 +1351,12 @@ private fun ColumnScope.GalleryEmptyState(message: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("◇", fontSize = 48.sp, color = Color(0xFFB7B0A8))
+        AppIcon(
+            resource = R.drawable.ic_empty_gallery,
+            contentDescription = null,
+            modifier = Modifier.size(52.dp),
+            tint = Color(0xFFB7B0A8),
+        )
         Spacer(Modifier.height(10.dp))
         Text(
             message,
@@ -1225,6 +1375,7 @@ private fun SettingsScreen(
     profileEmail: String,
     onNotificationsChanged: (Boolean, String) -> Unit,
     onCollectionsChanged: (List<String>) -> Unit,
+    onPasswordChange: (String, String) -> Unit,
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onDeleteAccount: () -> Unit,
@@ -1246,13 +1397,13 @@ private fun SettingsScreen(
             Text("Профиль", fontFamily = FontFamily.SansSerif, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
             SettingsGroup {
-                SettingsActionRow("Email", profileEmail, null)
+                SettingsActionRow("Email", value = profileEmail)
                 HorizontalRule()
-                SettingsActionRow("Сменить пароль", "›") { showPasswordDialog = true }
+                SettingsActionRow("Сменить пароль", onClick = { showPasswordDialog = true })
                 HorizontalRule()
-                SettingsActionRow("Выйти из аккаунта", "›") { confirmLogout = true }
+                SettingsActionRow("Выйти из аккаунта", onClick = { confirmLogout = true })
                 HorizontalRule()
-                SettingsActionRow("Удалить аккаунт", "›") { confirmDelete = true }
+                SettingsActionRow("Удалить аккаунт", onClick = { confirmDelete = true })
             }
         }
         item { HorizontalRule() }
@@ -1287,17 +1438,13 @@ private fun SettingsScreen(
             Text("О приложении", fontFamily = FontFamily.SansSerif, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
             SettingsGroup {
-                SettingsActionRow("Оценить приложение", "›") {
-                    Toast.makeText(context, "Страница приложения будет доступна после публикации", Toast.LENGTH_LONG).show()
-                }
+                SettingsActionRow("Версия", value = "1.0.0")
                 HorizontalRule()
-                SettingsActionRow("Версия", "1.0.0", null)
-                HorizontalRule()
-                SettingsActionRow("Служба поддержки", "›") {
+                SettingsActionRow("Служба поддержки", onClick = {
                     val intent = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:support@dailycanvas.app"))
                     runCatching { context.startActivity(intent) }
                         .onFailure { Toast.makeText(context, "support@dailycanvas.app", Toast.LENGTH_LONG).show() }
-                }
+                })
             }
         }
     }
@@ -1311,13 +1458,19 @@ private fun SettingsScreen(
             },
         )
     }
-    if (showPasswordDialog) PasswordChangeDialog(onDismiss = { showPasswordDialog = false })
+    if (showPasswordDialog) PasswordChangeDialog(
+        onDismiss = { showPasswordDialog = false },
+        onSubmit = { currentPassword, newPassword ->
+            showPasswordDialog = false
+            onPasswordChange(currentPassword, newPassword)
+        },
+    )
     if (confirmLogout) ConfirmActionDialog("Выйти из аккаунта?", "На этом устройстве потребуется повторный вход.", "Выйти", { confirmLogout = false }, onLogout)
-    if (confirmDelete) ConfirmActionDialog("Удалить аккаунт?", "Это действие нельзя отменить. Серверное удаление будет доступно после подключения API аккаунта.", "Удалить", { confirmDelete = false }, onDeleteAccount)
+    if (confirmDelete) ConfirmActionDialog("Удалить аккаунт?", "Профиль, настройки и избранное будут безвозвратно удалены из базы данных.", "Удалить", { confirmDelete = false }, onDeleteAccount)
 }
 
 @Composable
-private fun PasswordChangeDialog(onDismiss: () -> Unit) {
+private fun PasswordChangeDialog(onDismiss: () -> Unit, onSubmit: (String, String) -> Unit) {
     var oldPassword by rememberSaveable { mutableStateOf("") }
     var newPassword by rememberSaveable { mutableStateOf("") }
     var repeated by rememberSaveable { mutableStateOf("") }
@@ -1331,7 +1484,10 @@ private fun PasswordChangeDialog(onDismiss: () -> Unit) {
             OutlinedTextField(repeated, { repeated = it }, label = { Text("Повторите пароль") }, visualTransformation = PasswordVisualTransformation())
             message?.let { Text(it, color = AccentRed, fontSize = 13.sp) }
         } },
-        confirmButton = { TextButton(onClick = { message = when { oldPassword.isBlank() -> "Введите старый пароль"; newPassword.length < 8 -> "Новый пароль должен содержать не менее 8 символов"; newPassword != repeated -> "Пароли не совпадают"; else -> "Сервер пока не поддерживает смену пароля" } }) { Text("Сохранить") } },
+        confirmButton = { TextButton(onClick = {
+            message = when { oldPassword.isBlank() -> "Введите старый пароль"; newPassword.length < 8 -> "Новый пароль должен содержать не менее 8 символов"; newPassword != repeated -> "Пароли не совпадают"; else -> null }
+            if (message == null) onSubmit(oldPassword, newPassword)
+        }) { Text("Сохранить") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )
 }
@@ -1380,7 +1536,11 @@ private fun DetailScreen(
                     SettingsIcon(modifier = Modifier.size(27.dp))
                 }
                 TextButton(onClick = { showShareMenu = true }, modifier = Modifier.size(44.dp), contentPadding = PaddingValues(0.dp)) {
-                    Text("⇧", fontSize = 29.sp, color = Color(0xFF172332))
+                    AppIcon(
+                        resource = R.drawable.ic_share,
+                        contentDescription = "Поделиться или скачать",
+                        modifier = Modifier.size(25.dp),
+                    )
                 }
             }
         }
@@ -1422,7 +1582,11 @@ private fun DetailScreen(
                         .clickable { onFavoriteToggle(artwork) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(if (artwork.isFavorite) "♥" else "♡", color = if (artwork.isFavorite) Color.White else Color(0xFF172332), fontSize = 32.sp)
+                    FavoriteIcon(
+                        isFavorite = artwork.isFavorite,
+                        modifier = Modifier.size(29.dp),
+                        tint = if (artwork.isFavorite) Color.White else Color(0xFF172332),
+                    )
                 }
             }
         }
@@ -1451,10 +1615,11 @@ private fun DetailScreen(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Text(
-                        text = if (descriptionExpanded) "⌃" else "⌄",
-                        color = Color(0xFF082C58),
-                        fontSize = 17.sp,
+                    AppIcon(
+                        resource = if (descriptionExpanded) R.drawable.ic_expand_less else R.drawable.ic_expand_more,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = Color(0xFF082C58),
                     )
                 }
             }
@@ -1540,7 +1705,11 @@ private fun ArtworkHeroCard(
                     )
                 }
                 Button(onClick = onFavoriteToggle) {
-                    Text(if (artwork.isFavorite) "♥" else "♡")
+                    FavoriteIcon(
+                        isFavorite = artwork.isFavorite,
+                        modifier = Modifier.size(22.dp),
+                        tint = Color.White,
+                    )
                 }
             }
             if (artwork.tags.isNotEmpty()) {
@@ -1624,7 +1793,11 @@ private fun ArtworkRow(
             }
             if (onFavoriteToggle != null) {
                 Button(onClick = onFavoriteToggle, modifier = Modifier.weight(0.16f)) {
-                    Text(if (artwork.isFavorite) "♥" else "♡")
+                    FavoriteIcon(
+                        isFavorite = artwork.isFavorite,
+                        modifier = Modifier.size(21.dp),
+                        tint = Color.White,
+                    )
                 }
             }
         }
@@ -1668,7 +1841,14 @@ private fun CollectionToggleRow(
             modifier = Modifier.size(30.dp).clip(CircleShape).background(if (isSelected) Color(0xFF082C58) else Color(0xFFE6E2DC)),
             contentAlignment = Alignment.Center,
         ) {
-            if (isSelected) Text("✓", color = Color.White, fontWeight = FontWeight.Bold)
+            if (isSelected) {
+                AppIcon(
+                    resource = R.drawable.ic_check,
+                    contentDescription = "Выбрано",
+                    modifier = Modifier.size(19.dp),
+                    tint = Color.White,
+                )
+            }
         }
     }
 }
@@ -1686,7 +1866,11 @@ private fun SettingsGroup(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun SettingsActionRow(label: String, value: String, onClick: (() -> Unit)?) {
+private fun SettingsActionRow(
+    label: String,
+    value: String? = null,
+    onClick: (() -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1695,7 +1879,16 @@ private fun SettingsActionRow(label: String, value: String, onClick: (() -> Unit
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, modifier = Modifier.weight(1f), fontSize = 16.sp)
-        Text(value, color = Color(0xFF55504C), fontSize = if (value == "›") 28.sp else 16.sp)
+        if (onClick != null) {
+            AppIcon(
+                resource = R.drawable.ic_chevron_right,
+                contentDescription = "Открыть",
+                modifier = Modifier.size(22.dp),
+                tint = Color(0xFF55504C),
+            )
+        } else if (value != null) {
+            Text(value, color = Color(0xFF55504C), fontSize = 16.sp)
+        }
     }
 }
 
@@ -1730,9 +1923,9 @@ private fun ZoomableArtworkDialog(
     artwork: ArtworkCard,
     onDismiss: () -> Unit,
 ) {
-    var scale by remember { mutableStateOf(1f) }
-    var offsetX by remember { mutableStateOf(0f) }
-    var offsetY by remember { mutableStateOf(0f) }
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
     var showHint by rememberSaveable { mutableStateOf(true) }
 
     Dialog(
@@ -1842,13 +2035,23 @@ private fun ShareDownloadDialog(
                 ) {
                     Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
-                            Text("⇧", color = Color.White, fontSize = 26.sp)
+                            AppIcon(
+                                resource = R.drawable.ic_share,
+                                contentDescription = null,
+                                modifier = Modifier.size(23.dp),
+                                tint = Color.White,
+                            )
                         }
                         Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
                             Text("Поделиться", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                             Text("Выбрать соцсеть или мессенджер", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp)
                         }
-                        Text("›", color = Color.White, fontSize = 28.sp)
+                        AppIcon(
+                            resource = R.drawable.ic_chevron_right,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = Color.White,
+                        )
                     }
                 }
                 Text("Скачать", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
@@ -1861,7 +2064,12 @@ private fun ShareDownloadDialog(
                             colors = CardDefaults.cardColors(containerColor = Color(0xFFF1EFEB)),
                         ) {
                             Column(modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("↓", color = Color(0xFF082C58), fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                                AppIcon(
+                                    resource = R.drawable.ic_download,
+                                    contentDescription = "Скачать ${format.name}",
+                                    modifier = Modifier.size(23.dp),
+                                    tint = Color(0xFF082C58),
+                                )
                                 Text(format.name, color = Color(0xFF172332), fontWeight = FontWeight.Bold)
                                 Text(if (format == ArtworkFormat.JPG) "компактно" else if (format == ArtworkFormat.PNG) "качество" else "современно", color = Color(0xFF77716C), fontSize = 10.sp)
                             }
