@@ -28,6 +28,7 @@ type Dependencies struct {
 func NewRouter(cfg config.Config, deps Dependencies) http.Handler {
 	router := chi.NewRouter()
 	router.Use(cors)
+	router.Use(authentication(deps.AuthService))
 
 	handler := Handler{
 		artworks:  deps.ArtworkService,
@@ -53,6 +54,34 @@ func NewRouter(cfg config.Config, deps Dependencies) http.Handler {
 	}
 
 	return router
+}
+
+func authentication(service auth.Service) func(http.Handler) http.Handler {
+	public := map[string]bool{
+		"/api/v1/auth/login":         true,
+		"/api/v1/auth/register":      true,
+		"/api/v1/auth/token/refresh": true,
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodOptions || !strings.HasPrefix(r.URL.Path, "/api/") || public[r.URL.Path] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			header := strings.TrimSpace(r.Header.Get("Authorization"))
+			parts := strings.Fields(header)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "Bearer token is required")
+				return
+			}
+			userID, err := service.ValidateAccess(parts[1])
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "Access token is invalid or expired")
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), userID)))
+		})
+	}
 }
 
 func staticFallback(webDir string) http.HandlerFunc {

@@ -44,6 +44,13 @@ data class CalendarItemDto(
     val date: String,
     @SerialName("artworkId") val artworkId: String,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
+)
+
+@Serializable
+data class ArtworkFocusPointDto(
+    val x: Float,
+    val y: Float,
 )
 
 @Serializable
@@ -51,8 +58,10 @@ data class ArtworkDetailDto(
     val id: String,
     val title: String,
     val artist: ArtistDto,
+    val country: String,
     val year: Int,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
     @SerialName("isFavorite") val isFavorite: Boolean? = null,
     val tags: List<TagDto> = emptyList(),
     val description: String,
@@ -65,8 +74,10 @@ data class ArtworkSummaryDto(
     val id: String,
     val title: String,
     val artist: ArtistDto,
+    val country: String,
     val year: Int,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
     @SerialName("isFavorite") val isFavorite: Boolean? = null,
     val tags: List<TagDto> = emptyList(),
 )
@@ -76,8 +87,10 @@ data class FavoriteArtworkDto(
     val id: String,
     val title: String,
     val artist: ArtistDto,
+    val country: String,
     val year: Int,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
     @SerialName("isFavorite") val isFavorite: Boolean? = null,
     val tags: List<TagDto> = emptyList(),
 )
@@ -103,6 +116,18 @@ data class TodayStatusDto(
 )
 
 @Serializable
+data class MainViewRequestDto(
+    val date: String,
+    @SerialName("artworkId") val artworkId: String,
+)
+
+@Serializable
+data class MainViewResponseDto(
+    val success: Boolean,
+    @SerialName("hasViewedToday") val hasViewedToday: Boolean,
+)
+
+@Serializable
 data class NotificationSettingsDto(
     val enabled: Boolean,
     val time: String,
@@ -119,6 +144,41 @@ data class FavoriteMutationResponseDto(
     val success: Boolean,
     @SerialName("artworkId") val artworkId: String,
     @SerialName("isFavorite") val isFavorite: Boolean,
+)
+
+@Serializable
+data class LoginRequestDto(val email: String, val password: String)
+
+@Serializable
+data class RegisterRequestDto(val email: String, val password: String, val name: String? = null)
+
+@Serializable
+data class ChangePasswordRequestDto(
+    @SerialName("currentPassword") val currentPassword: String,
+    @SerialName("newPassword") val newPassword: String,
+)
+
+@Serializable
+data class RefreshTokenRequestDto(@SerialName("refreshToken") val refreshToken: String)
+
+@Serializable
+data class RefreshTokenResponseDto(
+    @SerialName("accessToken") val accessToken: String,
+    @SerialName("refreshToken") val refreshToken: String,
+    @SerialName("tokenType") val tokenType: String,
+    @SerialName("accessTokenExpiresIn") val accessTokenExpiresIn: Int,
+    @SerialName("refreshTokenExpiresIn") val refreshTokenExpiresIn: Int,
+)
+
+@Serializable
+data class UserProfileDto(val id: String, val email: String, val name: String? = null, @SerialName("createdAt") val createdAt: String)
+
+@Serializable
+data class AuthResponseDto(
+    @SerialName("accessToken") val accessToken: String,
+    @SerialName("refreshToken") val refreshToken: String,
+    @SerialName("tokenType") val tokenType: String,
+    val user: UserProfileDto,
 )
 
 @Serializable

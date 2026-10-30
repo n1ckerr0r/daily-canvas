@@ -7,6 +7,18 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <section id="auth-screen" class="auth-screen">
+      <form id="auth-form" class="auth-card">
+        <p class="eyebrow">DailyCanvas</p>
+        <h1 id="auth-title">Войдите в коллекцию</h1>
+        <p id="auth-copy" class="lede">Ваши избранные и настройки будут сохранены в аккаунте.</p>
+        <label>Email<input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com" /></label>
+        <label>Пароль<input id="auth-password" type="password" autocomplete="current-password" required minlength="8" placeholder="Не менее 8 символов" /></label>
+        <p id="auth-error" class="auth-error" role="alert"></p>
+        <button id="auth-submit" class="primary-button" type="submit">Войти</button>
+        <button id="auth-toggle" class="link-button" type="button">Нет аккаунта? Зарегистрироваться</button>
+      </form>
+    </section>
     <div class="app-shell">
       <aside class="sidebar">
         <div>
@@ -42,6 +54,7 @@
             <button id="refresh-button" class="ghost-button" type="button">Обновить</button>
           </div>
         </header>
+        <p id="app-error" class="app-error" role="alert" aria-live="polite"></p>
 
         <section id="overview-view" class="view active">
           <div class="overview-grid">

@@ -3,6 +3,7 @@ package com.n1ckerr0r.dailycanvas.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.n1ckerr0r.dailycanvas.data.DailyCanvasRepository
+import com.n1ckerr0r.dailycanvas.data.remote.NetworkModule
 import com.n1ckerr0r.dailycanvas.ui.model.ArtworkCard
 import com.n1ckerr0r.dailycanvas.ui.model.CalendarArtwork
 import com.n1ckerr0r.dailycanvas.ui.model.HomePayload
@@ -11,17 +12,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+import retrofit2.HttpException
+import java.io.IOException
 import java.time.LocalDate
 import java.time.YearMonth
 
 class DailyCanvasViewModel(
     private val repository: DailyCanvasRepository = DailyCanvasRepository(),
 ) : ViewModel() {
-    private val _state = MutableStateFlow(DailyCanvasUiState())
+    private val _state = MutableStateFlow(DailyCanvasUiState(isAuthenticated = NetworkModule.session.hasSession()))
     val state: StateFlow<DailyCanvasUiState> = _state.asStateFlow()
 
     init {
-        refresh()
+        if (NetworkModule.session.hasSession()) refresh() else _state.value = DailyCanvasUiState(isLoading = false)
     }
 
     fun refresh() {
@@ -31,6 +35,7 @@ class DailyCanvasViewModel(
                 .onSuccess { payload ->
                     _state.value = DailyCanvasUiState(
                         isLoading = false,
+                        isAuthenticated = true,
                         payload = payload,
                         selectedArtwork = payload.artworkOfDay,
                     )
@@ -38,9 +43,49 @@ class DailyCanvasViewModel(
                 .onFailure { error ->
                     _state.value = _state.value.copy(
                         isLoading = false,
-                        error = error.message ?: "Не удалось загрузить данные",
+                        isAuthenticated = NetworkModule.session.hasSession(),
+                        error = error.toUserMessage("Не удалось загрузить данные"),
                     )
                 }
+        }
+    }
+
+    fun authenticate(email: String, password: String, name: String?, register: Boolean, onSuccess: (String) -> Unit) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isLoading = true, error = null)
+            runCatching { repository.authenticate(email, password, name, register) }
+                .onSuccess { authenticatedEmail ->
+                    _state.value = _state.value.copy(isAuthenticated = true)
+                    refresh()
+                    onSuccess(authenticatedEmail)
+                }
+                .onFailure { error ->
+                    _state.value = _state.value.copy(isLoading = false, error = error.toUserMessage("Не удалось авторизоваться"))
+                }
+        }
+    }
+
+    fun logout(onComplete: () -> Unit) {
+        viewModelScope.launch {
+            repository.logout()
+            _state.value = DailyCanvasUiState(isLoading = false)
+            onComplete()
+        }
+    }
+
+    fun deleteAccount(onComplete: () -> Unit) {
+        viewModelScope.launch {
+            runCatching { repository.deleteAccount() }
+                .onSuccess { _state.value = DailyCanvasUiState(isLoading = false); onComplete() }
+                .onFailure { error -> _state.value = _state.value.copy(error = error.toUserMessage("Не удалось удалить аккаунт")) }
+        }
+    }
+
+    fun changePassword(currentPassword: String, newPassword: String, onComplete: () -> Unit) {
+        viewModelScope.launch {
+            runCatching { repository.changePassword(currentPassword, newPassword) }
+                .onSuccess { _state.value = DailyCanvasUiState(isLoading = false); onComplete() }
+                .onFailure { error -> _state.value = _state.value.copy(error = error.toUserMessage("Не удалось сменить пароль")) }
         }
     }
 
@@ -50,8 +95,17 @@ class DailyCanvasViewModel(
             val cached = (payload.gallery + payload.favorites + payload.artworkOfDay)
                 .firstOrNull { it.id == artworkId }
             _state.value = _state.value.copy(selectedArtwork = cached ?: payload.artworkOfDay)
+            if (artworkId == payload.artworkOfDay.id) {
+                runCatching { repository.markTodayViewed(payload.date, artworkId) }
+                    .onFailure { error ->
+                        _state.value = _state.value.copy(error = error.toUserMessage("Не удалось сохранить просмотр"))
+                    }
+            }
             runCatching { repository.loadArtwork(artworkId) }
                 .onSuccess { loaded -> _state.value = _state.value.copy(selectedArtwork = loaded) }
+                .onFailure { error ->
+                    _state.value = _state.value.copy(error = error.toUserMessage("Не удалось открыть картину"))
+                }
         }
     }
 
@@ -72,7 +126,7 @@ class DailyCanvasViewModel(
                 .onFailure { error ->
                     _state.value = _state.value.copy(
                         isCalendarLoading = false,
-                        error = error.message ?: "Не удалось загрузить календарь",
+                        error = error.toUserMessage("Не удалось загрузить календарь"),
                     )
                 }
         }
@@ -100,7 +154,7 @@ class DailyCanvasViewModel(
                     _state.value = _state.value.copy(
                         calendarMonth = YearMonth.now().toString(),
                         isCalendarLoading = false,
-                        error = error.message ?: "Не удалось загрузить календарь",
+                        error = error.toUserMessage("Не удалось загрузить календарь"),
                     )
                 }
         }
@@ -119,7 +173,7 @@ class DailyCanvasViewModel(
                     _state.value = _state.value.copy(pendingFavoriteIds = _state.value.pendingFavoriteIds - artwork.id)
                 }
                 .onFailure { error ->
-                    _state.value = previous.copy(error = error.message ?: "Не удалось изменить избранное")
+                    _state.value = previous.copy(error = error.toUserMessage("Не удалось изменить избранное"))
                 }
         }
     }
@@ -134,7 +188,7 @@ class DailyCanvasViewModel(
                     )
                 }
                 .onFailure { error ->
-                    _state.value = _state.value.copy(error = error.message ?: "Не удалось сохранить напоминания")
+                    _state.value = _state.value.copy(error = error.toUserMessage("Не удалось сохранить напоминания"))
                 }
         }
     }
@@ -145,9 +199,13 @@ class DailyCanvasViewModel(
                 .onSuccess { settings ->
                     val payload = _state.value.payload ?: return@onSuccess
                     _state.value = _state.value.copy(payload = payload.copy(settings = settings))
+                    // Collection choice changes the server-side gallery scope.
+                    // Reload all dependent screens immediately instead of keeping
+                    // stale cards until the next app launch.
+                    refresh()
                 }
                 .onFailure { error ->
-                    _state.value = _state.value.copy(error = error.message ?: "Не удалось сохранить коллекции")
+                    _state.value = _state.value.copy(error = error.toUserMessage("Не удалось сохранить коллекции"))
                 }
         }
     }
@@ -155,6 +213,32 @@ class DailyCanvasViewModel(
     fun consumeError() {
         _state.value = _state.value.copy(error = null)
     }
+}
+
+private fun Throwable.toUserMessage(fallback: String): String = when (this) {
+    is IOException -> "Не удалось связаться с сервером. Проверьте подключение к интернету."
+    is HttpException -> {
+        val apiCode = runCatching {
+            JSONObject(response()?.errorBody()?.string().orEmpty()).optString("code")
+        }.getOrDefault("")
+        when (apiCode) {
+            "invalid_email" -> "Введите корректный адрес электронной почты."
+            "invalid_credentials" -> "Неверный email или пароль."
+            "email_taken" -> "Аккаунт с таким email уже существует."
+            "unauthorized", "invalid_token" -> "Сессия истекла. Войдите в аккаунт снова."
+            "not_found" -> "Запрошенные данные не найдены."
+            "not_assigned" -> "Эта картина не назначена на выбранную дату."
+            "bad_request" -> "Проверьте введённые данные и попробуйте снова."
+            "internal_error" -> "Сервер временно не может выполнить запрос. Попробуйте позже."
+            else -> when (code()) {
+                401 -> "Неверный email или пароль."
+                404 -> "Запрошенные данные не найдены."
+                in 500..599 -> "Сервер временно недоступен. Попробуйте позже."
+                else -> fallback
+            }
+        }
+    }
+    else -> fallback
 }
 
 private fun DailyCanvasUiState.withFavorite(artworkId: String, favorite: Boolean): DailyCanvasUiState {
@@ -178,6 +262,7 @@ private fun DailyCanvasUiState.withFavorite(artworkId: String, favorite: Boolean
 
 data class DailyCanvasUiState(
     val isLoading: Boolean = true,
+    val isAuthenticated: Boolean = false,
     val payload: HomePayload? = null,
     val selectedArtwork: ArtworkCard? = null,
     val calendar: List<CalendarArtwork> = emptyList(),

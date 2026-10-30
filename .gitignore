@@ -1,0 +1,9 @@
+.idea/
+android/.idea/
+android/.kotlin/
+android/local.properties
+android/**/build/
+backend/.env
+
+# Local artwork source. This will be replaced by S3 in production.
+/local-data/

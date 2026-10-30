@@ -119,25 +119,39 @@ type Artist struct {
 type ArtworkDetail struct {
 	Artist      Artist     `json:"artist"`
 	Collection  Collection `json:"collection"`
+	Country     string     `json:"country"`
 	Description string     `json:"description"`
 	Facts       []string   `json:"facts"`
-	Id          string     `json:"id"`
-	ImageUrl    string     `json:"imageUrl"`
-	IsFavorite  *bool      `json:"isFavorite,omitempty"`
-	Tags        *[]Tag     `json:"tags,omitempty"`
-	Title       string     `json:"title"`
-	Year        int        `json:"year"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	Id         string            `json:"id"`
+	ImageUrl   string            `json:"imageUrl"`
+	IsFavorite *bool             `json:"isFavorite,omitempty"`
+	Tags       *[]Tag            `json:"tags,omitempty"`
+	Title      string            `json:"title"`
+	Year       int               `json:"year"`
+}
+
+// ArtworkFocusPoint Normalized point that must remain visible when the image is cropped.
+type ArtworkFocusPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 // ArtworkSummary defines model for ArtworkSummary.
 type ArtworkSummary struct {
-	Artist     Artist `json:"artist"`
-	Id         string `json:"id"`
-	ImageUrl   string `json:"imageUrl"`
-	IsFavorite *bool  `json:"isFavorite,omitempty"`
-	Tags       *[]Tag `json:"tags,omitempty"`
-	Title      string `json:"title"`
-	Year       int    `json:"year"`
+	Artist  Artist `json:"artist"`
+	Country string `json:"country"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	Id         string            `json:"id"`
+	ImageUrl   string            `json:"imageUrl"`
+	IsFavorite *bool             `json:"isFavorite,omitempty"`
+	Tags       *[]Tag            `json:"tags,omitempty"`
+	Title      string            `json:"title"`
+	Year       int               `json:"year"`
 }
 
 // AuthResponse defines model for AuthResponse.
@@ -158,7 +172,10 @@ type AuthResponse struct {
 type CalendarItem struct {
 	ArtworkId string             `json:"artworkId"`
 	Date      openapi_types.Date `json:"date"`
-	ImageUrl  string             `json:"imageUrl"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	ImageUrl   string            `json:"imageUrl"`
 }
 
 // CalendarResponse defines model for CalendarResponse.
@@ -166,6 +183,12 @@ type CalendarResponse struct {
 	From  openapi_types.Date `json:"from"`
 	Items []CalendarItem     `json:"items"`
 	To    openapi_types.Date `json:"to"`
+}
+
+// ChangePasswordRequest defines model for ChangePasswordRequest.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
 }
 
 // Collection defines model for Collection.
@@ -187,14 +210,18 @@ type FavoriteAddedResponse struct {
 
 // FavoriteArtworkItem defines model for FavoriteArtworkItem.
 type FavoriteArtworkItem struct {
-	AddedAt    time.Time `json:"addedAt"`
-	Artist     Artist    `json:"artist"`
-	Id         string    `json:"id"`
-	ImageUrl   string    `json:"imageUrl"`
-	IsFavorite *bool     `json:"isFavorite,omitempty"`
-	Tags       *[]Tag    `json:"tags,omitempty"`
-	Title      string    `json:"title"`
-	Year       int       `json:"year"`
+	AddedAt time.Time `json:"addedAt"`
+	Artist  Artist    `json:"artist"`
+	Country string    `json:"country"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	Id         string            `json:"id"`
+	ImageUrl   string            `json:"imageUrl"`
+	IsFavorite *bool             `json:"isFavorite,omitempty"`
+	Tags       *[]Tag            `json:"tags,omitempty"`
+	Title      string            `json:"title"`
+	Year       int               `json:"year"`
 }
 
 // FavoriteMutationRequest defines model for FavoriteMutationRequest.
@@ -299,12 +326,16 @@ type RefreshTokenResponse struct {
 // RegisterRequest defines model for RegisterRequest.
 type RegisterRequest struct {
 	Email    openapi_types.Email `json:"email"`
+	Name     *string             `json:"name,omitempty"`
 	Password string              `json:"password"`
 }
 
 // SearchArtworkItem defines model for SearchArtworkItem.
 type SearchArtworkItem struct {
-	Artist     Artist             `json:"artist"`
+	Artist Artist `json:"artist"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint  `json:"focusPoint"`
 	Id         string             `json:"id"`
 	ImageUrl   string             `json:"imageUrl"`
 	IsFavorite *bool              `json:"isFavorite,omitempty"`
@@ -370,6 +401,7 @@ type UserProfile struct {
 	CreatedAt *time.Time          `json:"createdAt,omitempty"`
 	Email     openapi_types.Email `json:"email"`
 	Id        string              `json:"id"`
+	Name      *string             `json:"name,omitempty"`
 }
 
 // ArtworkId defines model for ArtworkId.
@@ -477,6 +509,9 @@ type MarkTodayArtworkViewedJSONRequestBody = MainViewRequest
 // UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
 type UpdateSettingsJSONRequestBody = SettingsPatch
 
+// ChangeCurrentUserPasswordJSONRequestBody defines body for ChangeCurrentUserPassword for application/json ContentType.
+type ChangeCurrentUserPasswordJSONRequestBody = ChangePasswordRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// Get gallery artworks
@@ -530,9 +565,15 @@ type ServerInterface interface {
 	// Get tags
 	// (GET /tags)
 	GetTags(w http.ResponseWriter, r *http.Request)
+	// Delete the current user account
+	// (DELETE /users/me)
+	DeleteCurrentUser(w http.ResponseWriter, r *http.Request)
 	// Get current user profile
 	// (GET /users/me)
 	GetCurrentUser(w http.ResponseWriter, r *http.Request)
+	// Change the current user's password
+	// (PATCH /users/me/password)
+	ChangeCurrentUserPassword(w http.ResponseWriter, r *http.Request)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -641,9 +682,21 @@ func (_ Unimplemented) GetTags(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Delete the current user account
+// (DELETE /users/me)
+func (_ Unimplemented) DeleteCurrentUser(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Get current user profile
 // (GET /users/me)
 func (_ Unimplemented) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Change the current user's password
+// (PATCH /users/me/password)
+func (_ Unimplemented) ChangeCurrentUserPassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1195,6 +1248,26 @@ func (siw *ServerInterfaceWrapper) GetTags(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteCurrentUser operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCurrentUser(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetCurrentUser operation middleware
 func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 
@@ -1206,6 +1279,26 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChangeCurrentUserPassword operation middleware
+func (siw *ServerInterfaceWrapper) ChangeCurrentUserPassword(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangeCurrentUserPassword(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1380,7 +1473,13 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/tags", wrapper.GetTags)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/users/me", wrapper.DeleteCurrentUser)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/users/me", wrapper.GetCurrentUser)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/users/me/password", wrapper.ChangeCurrentUserPassword)
 	})
 
 	return r

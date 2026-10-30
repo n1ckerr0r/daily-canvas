@@ -3,10 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/artwork"
@@ -23,15 +25,80 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-func (s *Store) GetDefault(ctx context.Context) (user.User, error) {
+func (s *Store) GetUserByID(ctx context.Context, userID string) (user.User, error) {
 	var value user.User
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, email, created_at
+		SELECT id, email, display_name, created_at
 		FROM users
-		ORDER BY created_at ASC
-		LIMIT 1
-	`).Scan(&value.ID, &value.Email, &value.CreatedAt)
+		WHERE id = $1
+	`, userID).Scan(&value.ID, &value.Email, &value.Name, &value.CreatedAt)
 	return value, err
+}
+
+func (s *Store) Create(ctx context.Context, email, name, passwordHash string) (user.User, error) {
+	value := user.User{ID: uuid.NewString(), Email: email, Name: name}
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO users(id, email, display_name, password_hash)
+		VALUES ($1, $2, $3, $4)
+		RETURNING created_at
+	`, value.ID, value.Email, value.Name, passwordHash).Scan(&value.CreatedAt)
+	if err != nil {
+		return user.User{}, err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO user_settings(user_id, selected_collections, notifications_enabled, notification_time, notification_time_zone)
+		VALUES ($1, ARRAY['russian', 'world'], TRUE, '20:00', 'Europe/Moscow')
+	`, value.ID)
+	return value, err
+}
+
+func (s *Store) FindByEmail(ctx context.Context, email string) (user.User, string, error) {
+	var value user.User
+	var passwordHash string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, email, display_name, password_hash, created_at
+		FROM users WHERE email = $1
+	`, email).Scan(&value.ID, &value.Email, &value.Name, &passwordHash, &value.CreatedAt)
+	return value, passwordHash, err
+}
+
+func (s *Store) Delete(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID)
+	return err
+}
+
+func (s *Store) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, passwordHash)
+	return err
+}
+
+func (s *Store) SaveRefreshToken(ctx context.Context, userID, tokenID, tokenHash string, expiresAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO refresh_tokens(id, user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, tokenID, userID, tokenHash, expiresAt)
+	return err
+}
+
+func (s *Store) IsRefreshTokenActive(ctx context.Context, userID, tokenID, tokenHash string) (bool, error) {
+	var active bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM refresh_tokens
+			WHERE id = $1 AND user_id = $2 AND token_hash = $3 AND expires_at > NOW() AND revoked_at IS NULL
+		)
+	`, tokenID, userID, tokenHash).Scan(&active)
+	return active, err
+}
+
+func (s *Store) RevokeRefreshToken(ctx context.Context, tokenID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1`, tokenID)
+	return err
+}
+
+func (s *Store) RevokeUserRefreshTokens(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return err
 }
 
 func (s *Store) Get(ctx context.Context, userID string) (settings.Settings, error) {
@@ -66,24 +133,81 @@ func (s *Store) Save(ctx context.Context, userID string, value settings.Settings
 	return s.Get(ctx, userID)
 }
 
-func (s *Store) GetToday(ctx context.Context, userID string, collections []artwork.Collection) (artwork.Artwork, error) {
-	items, err := s.listArtworks(ctx, userID, baseArtworkQuery(`
-		WHERE a.collection = ANY($2)
-		ORDER BY a.published_on DESC, a.title ASC
-		LIMIT 1
-	`), userID, pq.Array(collectionStrings(collections)))
+func (s *Store) GetDaily(ctx context.Context, userID string, collections []artwork.Collection, day time.Time) (artwork.DailyArtwork, error) {
+	day = dateOnly(day)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return artwork.Artwork{}, err
+		return artwork.DailyArtwork{}, err
 	}
-	if len(items) == 0 {
-		return artwork.Artwork{}, artwork.ErrNotFound
+	defer tx.Rollback()
+
+	// Serialize assignment creation per user so simultaneous devices always see
+	// one stable artwork and cannot consume two entries from the sequence.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, userID); err != nil {
+		return artwork.DailyArtwork{}, err
 	}
-	return items[0], nil
+
+	var artworkID string
+	var assignedOn time.Time
+	err = tx.QueryRowContext(ctx, `
+		SELECT artwork_id, assigned_on
+		FROM daily_artwork_assignments
+		WHERE user_id = $1 AND assigned_on = $2
+	`, userID, day).Scan(&artworkID, &assignedOn)
+
+	exhausted := false
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `
+			SELECT a.id
+			FROM artworks a
+			WHERE a.active = TRUE
+			  AND a.collection = ANY($2)
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM daily_artwork_assignments history
+				WHERE history.user_id = $1 AND history.artwork_id = a.id
+			  )
+			ORDER BY md5($1 || ':' || a.id), a.id
+			LIMIT 1
+		`, userID, pq.Array(collectionStrings(collections))).Scan(&artworkID)
+		if err == nil {
+			assignedOn = day
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO daily_artwork_assignments(user_id, assigned_on, artwork_id)
+				VALUES ($1, $2, $3)
+			`, userID, day, artworkID)
+		} else if errors.Is(err, sql.ErrNoRows) {
+			exhausted = true
+			err = tx.QueryRowContext(ctx, `
+				SELECT history.artwork_id, history.assigned_on
+				FROM daily_artwork_assignments history
+				JOIN artworks a ON a.id = history.artwork_id
+				WHERE history.user_id = $1 AND a.collection = ANY($2)
+				ORDER BY history.assigned_on DESC
+				LIMIT 1
+			`, userID, pq.Array(collectionStrings(collections))).Scan(&artworkID, &assignedOn)
+		}
+	}
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return artwork.DailyArtwork{}, artwork.ErrNotFound
+		}
+		return artwork.DailyArtwork{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return artwork.DailyArtwork{}, err
+	}
+
+	item, err := s.GetByID(ctx, userID, artworkID)
+	if err != nil {
+		return artwork.DailyArtwork{}, err
+	}
+	return artwork.DailyArtwork{Artwork: item, Date: dateOnly(assignedOn), Exhausted: exhausted}, nil
 }
 
 func (s *Store) ListGallery(ctx context.Context, userID string, filter artwork.Filter, collections []artwork.Collection) ([]artwork.Artwork, error) {
 	args := []any{userID}
-	where := []string{"a.collection = ANY($2)"}
+	where := []string{"a.active = TRUE", "a.collection = ANY($2)"}
 	args = append(args, pq.Array(collectionStrings(collections)))
 
 	if filter.Collection != nil {
@@ -127,13 +251,14 @@ func (s *Store) GetByID(ctx context.Context, userID string, artworkID string) (a
 	return items[0], nil
 }
 
-func (s *Store) GetCalendar(ctx context.Context, from time.Time, to time.Time) ([]artwork.CalendarItem, error) {
+func (s *Store) GetCalendar(ctx context.Context, userID string, from time.Time, to time.Time) ([]artwork.CalendarItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT published_on, id, image_path
-		FROM artworks
-		WHERE published_on BETWEEN $1 AND $2
-		ORDER BY published_on ASC
-	`, from, to)
+		SELECT history.assigned_on, a.id, a.image_path, a.focus_x, a.focus_y
+		FROM daily_artwork_assignments history
+		JOIN artworks a ON a.id = history.artwork_id
+		WHERE history.user_id = $1 AND history.assigned_on BETWEEN $2 AND $3
+		ORDER BY history.assigned_on ASC
+	`, userID, dateOnly(from), dateOnly(to))
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +267,7 @@ func (s *Store) GetCalendar(ctx context.Context, from time.Time, to time.Time) (
 	items := make([]artwork.CalendarItem, 0)
 	for rows.Next() {
 		var value artwork.CalendarItem
-		if err := rows.Scan(&value.Date, &value.ArtworkID, &value.ImagePath); err != nil {
+		if err := rows.Scan(&value.Date, &value.ArtworkID, &value.ImagePath, &value.FocusX, &value.FocusY); err != nil {
 			return nil, err
 		}
 		items = append(items, value)
@@ -152,8 +277,10 @@ func (s *Store) GetCalendar(ctx context.Context, from time.Time, to time.Time) (
 
 func (s *Store) ListTags(ctx context.Context) ([]artwork.Tag, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT tag_id, tag_name, tag_type
-		FROM artwork_tags
+		SELECT DISTINCT tags.tag_id, tags.tag_name, tags.tag_type
+		FROM artwork_tags tags
+		JOIN artworks a ON a.id = tags.artwork_id
+		WHERE a.active = TRUE
 		ORDER BY tag_name ASC
 	`)
 	if err != nil {
@@ -185,12 +312,38 @@ func (s *Store) HasViewedOn(ctx context.Context, userID string, artworkID string
 }
 
 func (s *Store) MarkViewedOn(ctx context.Context, userID string, artworkID string, day time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO artwork_views(user_id, artwork_id, viewed_on)
-		VALUES ($1, $2, $3)
+		SELECT $1, $2, $3
+		WHERE EXISTS (
+			SELECT 1 FROM daily_artwork_assignments
+			WHERE user_id = $1 AND artwork_id = $2 AND assigned_on = $3
+		)
 		ON CONFLICT (user_id, artwork_id, viewed_on) DO NOTHING
 	`, userID, artworkID, dateOnly(day))
-	return err
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 0 {
+		var assigned bool
+		err := s.db.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM daily_artwork_assignments
+				WHERE user_id = $1 AND artwork_id = $2 AND assigned_on = $3
+			)
+		`, userID, artworkID, dateOnly(day)).Scan(&assigned)
+		if err != nil {
+			return err
+		}
+		if !assigned {
+			return artwork.ErrNotAssigned
+		}
+	}
+	return nil
 }
 
 func (s *Store) Add(ctx context.Context, userID string, artworkID string) error {
@@ -221,11 +374,11 @@ func (s *Store) List(ctx context.Context, userID string, sort favorite.Sort) ([]
 	query := `
 		SELECT
 			a.id, a.title, a.artist_id, a.artist_name, a.country, a.collection,
-			a.year_value, a.year_label, a.image_path, a.description, a.facts, a.published_on,
+			a.year_value, a.year_label, a.image_path, a.focus_x, a.focus_y, a.description, a.facts, a.published_on,
 			TRUE AS is_favorite, f.added_at
 		FROM favorites f
 		JOIN artworks a ON a.id = f.artwork_id
-		WHERE f.user_id = $1
+		WHERE f.user_id = $1 AND a.active = TRUE
 		ORDER BY ` + orderBy
 
 	rows, err := s.db.QueryContext(ctx, query, userID)
@@ -249,6 +402,8 @@ func (s *Store) List(ctx context.Context, userID string, sort favorite.Sort) ([]
 			&value.Artwork.YearValue,
 			&value.Artwork.YearLabel,
 			&value.Artwork.ImagePath,
+			&value.Artwork.FocusX,
+			&value.Artwork.FocusY,
 			&value.Artwork.Description,
 			pq.Array(&rawFacts),
 			&value.Artwork.PublishedOn,
@@ -297,6 +452,8 @@ func (s *Store) listArtworks(ctx context.Context, userID string, query string, a
 			&item.YearValue,
 			&item.YearLabel,
 			&item.ImagePath,
+			&item.FocusX,
+			&item.FocusY,
 			&item.Description,
 			pq.Array(&rawFacts),
 			&item.PublishedOn,
@@ -355,7 +512,7 @@ func baseArtworkQuery(suffix string) string {
 	return `
 		SELECT
 			a.id, a.title, a.artist_id, a.artist_name, a.country, a.collection,
-			a.year_value, a.year_label, a.image_path, a.description, a.facts, a.published_on,
+			a.year_value, a.year_label, a.image_path, a.focus_x, a.focus_y, a.description, a.facts, a.published_on,
 			COALESCE(f.artwork_id IS NOT NULL, FALSE) AS is_favorite
 		FROM artworks a
 		LEFT JOIN favorites f

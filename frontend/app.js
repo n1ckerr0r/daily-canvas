@@ -7,6 +7,7 @@ const state = {
   activeTag: "",
   payload: null,
   detail: null,
+  registerMode: false,
 };
 
 const elements = {
@@ -24,20 +25,88 @@ const elements = {
   tagFilters: document.querySelector("#tag-filters"),
   navButtons: Array.from(document.querySelectorAll(".nav-button")),
   views: Array.from(document.querySelectorAll(".view")),
+  authScreen: document.querySelector("#auth-screen"),
+  authForm: document.querySelector("#auth-form"),
+  authTitle: document.querySelector("#auth-title"),
+  authCopy: document.querySelector("#auth-copy"),
+  authEmail: document.querySelector("#auth-email"),
+  authPassword: document.querySelector("#auth-password"),
+  authError: document.querySelector("#auth-error"),
+  authSubmit: document.querySelector("#auth-submit"),
+  authToggle: document.querySelector("#auth-toggle"),
+  appError: document.querySelector("#app-error"),
 };
 
 elements.apiBaseUrl.textContent = apiBaseUrl;
 
+const apiErrorMessage = (status, code) => {
+  const messages = {
+    invalid_email: "Введите корректный адрес электронной почты.",
+    invalid_credentials: "Неверный email или пароль.",
+    email_taken: "Аккаунт с таким email уже существует.",
+    unauthorized: "Сессия истекла. Войдите снова.",
+    invalid_token: "Сессия истекла. Войдите снова.",
+    not_found: "Запрошенные данные не найдены.",
+    bad_request: "Проверьте введённые данные.",
+    internal_error: "Сервер временно не может выполнить запрос. Попробуйте позже.",
+  };
+  if (messages[code]) return messages[code];
+  if (status >= 500) return "Сервер временно недоступен. Попробуйте позже.";
+  return "Не удалось выполнить запрос. Попробуйте ещё раз.";
+};
+
 const request = async (path, options = {}) => {
+  const token = sessionStorage.getItem("dailycanvas_access_token");
   const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) },
     ...options,
   });
-  if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
-  }
-  return response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(apiErrorMessage(response.status, payload.code));
+  return payload;
 };
+
+const showAppError = (error) => {
+  elements.appError.textContent = error?.message || "Произошла ошибка. Попробуйте ещё раз.";
+  elements.appError.classList.add("visible");
+};
+const clearAppError = () => {
+  elements.appError.textContent = "";
+  elements.appError.classList.remove("visible");
+};
+
+const setAuthMode = (registerMode) => {
+  state.registerMode = registerMode;
+  elements.authTitle.textContent = registerMode ? "Создайте аккаунт" : "Войдите в коллекцию";
+  elements.authCopy.textContent = registerMode ? "Избранные и настройки будут храниться в вашем аккаунте." : "Ваши избранные и настройки будут сохранены в аккаунте.";
+  elements.authSubmit.textContent = registerMode ? "Зарегистрироваться" : "Войти";
+  elements.authToggle.textContent = registerMode ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Зарегистрироваться";
+  elements.authError.textContent = "";
+};
+
+const showAuth = (message = "") => { elements.authScreen.classList.add("visible"); elements.authError.textContent = message; };
+const hideAuth = () => elements.authScreen.classList.remove("visible");
+
+elements.authToggle.addEventListener("click", () => setAuthMode(!state.registerMode));
+elements.authForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const email = elements.authEmail.value.trim();
+  const password = elements.authPassword.value;
+  elements.authError.textContent = "";
+  if (!elements.authEmail.checkValidity()) {
+    elements.authError.textContent = "Введите корректный email, например name@example.com";
+    return;
+  }
+  try {
+    const response = await fetch(`${apiBaseUrl}/auth/${state.registerMode ? "register" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(apiErrorMessage(response.status, payload.code));
+    sessionStorage.setItem("dailycanvas_access_token", payload.accessToken);
+    sessionStorage.setItem("dailycanvas_refresh_token", payload.refreshToken);
+    hideAuth();
+    await refresh();
+  } catch (error) { elements.authError.textContent = error.message || "Не удалось авторизоваться"; }
+});
 
 const render = () => {
   syncViews();
@@ -264,6 +333,9 @@ document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
 
+  clearAppError();
+  try {
+
   if (button.dataset.view) {
     state.view = button.dataset.view;
     render();
@@ -309,6 +381,9 @@ document.addEventListener("click", async (event) => {
       },
     });
   }
+  } catch (error) {
+    showAppError(error);
+  }
 });
 
 elements.searchInput.addEventListener("input", (event) => {
@@ -316,9 +391,12 @@ elements.searchInput.addEventListener("input", (event) => {
   renderGallery();
 });
 
-elements.refreshButton.addEventListener("click", refresh);
+elements.refreshButton.addEventListener("click", () => refresh().catch(showAppError));
 
-refresh().catch((error) => {
+if (!sessionStorage.getItem("dailycanvas_access_token")) {
+  showAuth();
+} else refresh().catch((error) => {
+  if (String(error.message).includes("401")) { sessionStorage.clear(); showAuth("Сессия истекла. Войдите снова."); return; }
   elements.heroCard.classList.remove("loading");
   elements.heroCard.innerHTML = `<p class="empty">Не удалось загрузить данные: ${error.message}</p>`;
 });

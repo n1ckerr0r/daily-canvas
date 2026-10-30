@@ -9,7 +9,10 @@ import (
 	"github.com/n1ckerr0r/dailycanvas/backend/internal/settings"
 )
 
-var ErrNotFound = errors.New("artwork not found")
+var (
+	ErrNotFound    = errors.New("artwork not found")
+	ErrNotAssigned = errors.New("artwork is not assigned to the user for this date")
+)
 
 type Collection string
 
@@ -56,6 +59,8 @@ type Artwork struct {
 	YearValue   int
 	YearLabel   string
 	ImagePath   string
+	FocusX      float64
+	FocusY      float64
 	Description string
 	Facts       []string
 	Tags        []Tag
@@ -80,13 +85,21 @@ type CalendarItem struct {
 	Date      time.Time
 	ArtworkID string
 	ImagePath string
+	FocusX    float64
+	FocusY    float64
+}
+
+type DailyArtwork struct {
+	Artwork   Artwork
+	Date      time.Time
+	Exhausted bool
 }
 
 type Repository interface {
-	GetToday(ctx context.Context, userID string, collections []Collection) (Artwork, error)
+	GetDaily(ctx context.Context, userID string, collections []Collection, day time.Time) (DailyArtwork, error)
 	ListGallery(ctx context.Context, userID string, filter Filter, collections []Collection) ([]Artwork, error)
 	GetByID(ctx context.Context, userID string, artworkID string) (Artwork, error)
-	GetCalendar(ctx context.Context, from time.Time, to time.Time) ([]CalendarItem, error)
+	GetCalendar(ctx context.Context, userID string, from time.Time, to time.Time) ([]CalendarItem, error)
 	ListTags(ctx context.Context) ([]Tag, error)
 	HasViewedOn(ctx context.Context, userID string, artworkID string, day time.Time) (bool, error)
 	MarkViewedOn(ctx context.Context, userID string, artworkID string, day time.Time) error
@@ -105,23 +118,24 @@ func NewService(repo Repository, settingsRepo SettingsReader) Service {
 	return Service{repo: repo, settingsRepo: settingsRepo}
 }
 
-func (s Service) Main(ctx context.Context, userID string) (Artwork, settings.Settings, bool, error) {
+func (s Service) Main(ctx context.Context, userID string) (DailyArtwork, settings.Settings, bool, error) {
 	cfg, err := s.settingsRepo.Get(ctx, userID)
 	if err != nil {
-		return Artwork{}, settings.Settings{}, false, err
+		return DailyArtwork{}, settings.Settings{}, false, err
 	}
 
-	art, err := s.repo.GetToday(ctx, userID, stringsToCollections(cfg.SelectedCollections))
+	day := localDay(time.Now(), cfg.Notifications.TimeZone)
+	daily, err := s.repo.GetDaily(ctx, userID, stringsToCollections(cfg.SelectedCollections), day)
 	if err != nil {
-		return Artwork{}, settings.Settings{}, false, err
+		return DailyArtwork{}, settings.Settings{}, false, err
 	}
 
-	viewed, err := s.repo.HasViewedOn(ctx, userID, art.ID, art.PublishedOn)
+	viewed, err := s.repo.HasViewedOn(ctx, userID, daily.Artwork.ID, daily.Date)
 	if err != nil {
-		return Artwork{}, settings.Settings{}, false, err
+		return DailyArtwork{}, settings.Settings{}, false, err
 	}
 
-	return art, cfg, viewed, nil
+	return daily, cfg, viewed, nil
 }
 
 func (s Service) Gallery(ctx context.Context, userID string, filter Filter) ([]Artwork, error) {
@@ -161,8 +175,8 @@ func (s Service) GetByID(ctx context.Context, userID string, artworkID string) (
 	return s.repo.GetByID(ctx, userID, artworkID)
 }
 
-func (s Service) Calendar(ctx context.Context, from time.Time, to time.Time) ([]CalendarItem, error) {
-	return s.repo.GetCalendar(ctx, from, to)
+func (s Service) Calendar(ctx context.Context, userID string, from time.Time, to time.Time) ([]CalendarItem, error) {
+	return s.repo.GetCalendar(ctx, userID, from, to)
 }
 
 func (s Service) Tags(ctx context.Context) ([]Tag, error) {
@@ -170,7 +184,7 @@ func (s Service) Tags(ctx context.Context) ([]Tag, error) {
 }
 
 func (s Service) TodayStatus(ctx context.Context, userID string) (bool, bool, string, error) {
-	art, cfg, viewed, err := s.Main(ctx, userID)
+	daily, cfg, viewed, err := s.Main(ctx, userID)
 	if err != nil {
 		return false, false, "", err
 	}
@@ -179,11 +193,22 @@ func (s Service) TodayStatus(ctx context.Context, userID string) (bool, bool, st
 	if viewed {
 		message = "Картина дня уже просмотрена, но вы можете вернуться к ней в галерее."
 	}
-	if art.Title != "" && !viewed {
-		message = "Сегодняшняя картина дня: " + art.Title
+	if daily.Exhausted {
+		message = "Вы уже открыли всю выбранную коллекцию. Новая картина появится после пополнения каталога."
+	} else if daily.Artwork.Title != "" && !viewed {
+		message = "Сегодняшняя картина дня: " + daily.Artwork.Title
 	}
 
 	return viewed, cfg.Notifications.Enabled, message, nil
+}
+
+func localDay(now time.Time, zone string) time.Time {
+	location, err := time.LoadLocation(strings.TrimSpace(zone))
+	if err != nil {
+		location = time.UTC
+	}
+	local := now.In(location)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 func (s Service) MarkViewed(ctx context.Context, userID string, artworkID string, day time.Time) error {
