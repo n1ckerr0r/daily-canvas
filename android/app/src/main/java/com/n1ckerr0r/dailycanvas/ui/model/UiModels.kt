@@ -5,8 +5,11 @@ data class ArtworkCard(
     val title: String,
     val artistId: String,
     val artist: String,
+    val country: String,
     val year: String,
     val imageUrl: String,
+    val focusX: Float,
+    val focusY: Float,
     val isFavorite: Boolean,
     val description: String,
     val facts: List<String>,
@@ -23,6 +26,8 @@ data class CalendarArtwork(
     val date: String,
     val artworkId: String,
     val imageUrl: String,
+    val focusX: Float,
+    val focusY: Float,
 )
 
 data class SettingsPayload(

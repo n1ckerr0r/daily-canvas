@@ -59,6 +59,8 @@ type Artwork struct {
 	YearValue   int
 	YearLabel   string
 	ImagePath   string
+	FocusX      float64
+	FocusY      float64
 	Description string
 	Facts       []string
 	Tags        []Tag
@@ -83,6 +85,8 @@ type CalendarItem struct {
 	Date      time.Time
 	ArtworkID string
 	ImagePath string
+	FocusX    float64
+	FocusY    float64
 }
 
 type DailyArtwork struct {

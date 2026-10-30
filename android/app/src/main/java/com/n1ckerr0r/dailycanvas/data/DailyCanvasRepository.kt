@@ -70,6 +70,8 @@ class DailyCanvasRepository(
                 date = it.date,
                 artworkId = it.artworkId,
                 imageUrl = it.imageUrl.toBackendUrl(),
+                focusX = it.focusPoint.x,
+                focusY = it.focusPoint.y,
             )
         }
     }

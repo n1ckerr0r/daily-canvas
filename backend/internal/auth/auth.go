@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -131,3 +132,19 @@ func tokenHash(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 func NormalizeEmail(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+
+// IsValidEmail validates the address syntax without trying to prove that the
+// mailbox exists. ParseAddress by itself also accepts display-name forms, so
+// require the parsed address to be exactly the normalized user input.
+func IsValidEmail(value string) bool {
+	email := NormalizeEmail(value)
+	if len(email) == 0 || len(email) > 254 || strings.Count(email, "@") != 1 || strings.Contains(email, "..") {
+		return false
+	}
+	parts := strings.SplitN(email, "@", 2)
+	if len(parts[0]) == 0 || len(parts[0]) > 64 || !strings.Contains(parts[1], ".") {
+		return false
+	}
+	address, err := mail.ParseAddress(email)
+	return err == nil && address.Address == email
+}

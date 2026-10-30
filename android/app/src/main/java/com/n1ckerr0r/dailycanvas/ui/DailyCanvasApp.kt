@@ -4,15 +4,16 @@ import android.content.Intent
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.drawable.BitmapDrawable
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Patterns
 import android.widget.Toast
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -93,10 +94,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -109,6 +114,7 @@ import androidx.navigation.navArgument
 import coil.compose.AsyncImage
 import coil.ImageLoader
 import coil.request.ImageRequest
+import androidx.core.graphics.drawable.toBitmap
 import com.n1ckerr0r.dailycanvas.R
 import com.n1ckerr0r.dailycanvas.data.remote.NetworkModule
 import com.n1ckerr0r.dailycanvas.ui.model.ArtworkCard
@@ -124,6 +130,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -144,6 +151,7 @@ fun DailyCanvasApp(
 ) {
     val navController = rememberNavController()
     val state by viewModel.state.collectAsState()
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     val snackbarHostState = remember { SnackbarHostState() }
     var galleryTag by rememberSaveable { mutableStateOf<String?>(null) }
     var galleryArtist by rememberSaveable { mutableStateOf<String?>(null) }
@@ -153,8 +161,8 @@ fun DailyCanvasApp(
     var profileEmail by remember { mutableStateOf(NetworkModule.session.email ?: "") }
     val hasSession = remember { NetworkModule.session.hasSession() }
 
-    LaunchedEffect(state.error) {
-        state.error?.let {
+    LaunchedEffect(state.error, currentRoute) {
+        state.error?.takeIf { currentRoute != AppDestination.Auth.route }?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.consumeError()
         }
@@ -176,6 +184,7 @@ fun DailyCanvasApp(
         composable(AppDestination.Auth.route) {
             AuthScreen(
                 isLoading = state.isLoading,
+                serverError = state.error,
                 onContinue = { email, password, name, register ->
                     viewModel.authenticate(email, password, name, register) { authenticatedEmail ->
                         profileEmail = authenticatedEmail
@@ -204,7 +213,7 @@ fun DailyCanvasApp(
                     },
                     onFavoriteToggle = viewModel::toggleFavorite,
                     onTagClick = { tag ->
-                      пше  galleryTag = tag.id
+                        galleryTag = tag.id
                         galleryArtist = null
                         navController.navigate(AppDestination.Gallery.route)
                     },
@@ -404,6 +413,7 @@ private fun MainScaffold(
 @Composable
 private fun AuthScreen(
     isLoading: Boolean,
+    serverError: String?,
     onContinue: (String, String, String?, Boolean) -> Unit,
 ) {
     var registerMode by rememberSaveable { mutableStateOf(false) }
@@ -414,6 +424,9 @@ private fun AuthScreen(
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var acceptedTerms by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(serverError) {
+        if (serverError != null) error = serverError
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -451,7 +464,16 @@ private fun AuthScreen(
             AuthField("Имя", "Введите ваше имя", name, { name = it })
             Spacer(Modifier.height(12.dp))
         }
-        AuthField(if (registerMode) "Email" else "Email или телефон", "Введите email", email, { email = it })
+        AuthField(
+            label = "Email",
+            placeholder = "name@example.com",
+            value = email,
+            onValueChange = {
+                email = it
+                if (error != null) error = null
+            },
+            keyboardType = KeyboardType.Email,
+        )
         Spacer(Modifier.height(12.dp))
         AuthField("Пароль", if (registerMode) "Создайте пароль" else "Введите пароль", password, { password = it }, true, passwordVisible, { passwordVisible = !passwordVisible })
         if (registerMode) {
@@ -467,7 +489,8 @@ private fun AuthScreen(
         Button(
             onClick = {
                 error = when {
-                    email.isBlank() || password.length < 8 -> "Введите email и пароль не короче 8 символов"
+                    !isValidEmail(email) -> "Введите корректный email, например name@example.com"
+                    password.length < 8 -> "Пароль должен содержать не менее 8 символов"
                     registerMode && name.isBlank() -> "Укажите имя"
                     registerMode && password != repeatedPassword -> "Пароли не совпадают"
                     registerMode && !acceptedTerms -> "Нужно принять условия"
@@ -488,8 +511,22 @@ private fun AuthScreen(
     }
 }
 
+private fun isValidEmail(value: String): Boolean {
+    val email = value.trim()
+    return email.length <= 254 && !email.contains("..") && Patterns.EMAIL_ADDRESS.matcher(email).matches()
+}
+
 @Composable
-private fun AuthField(label: String, placeholder: String, value: String, onValueChange: (String) -> Unit, password: Boolean = false, visible: Boolean = false, onToggleVisible: () -> Unit = {}) {
+private fun AuthField(
+    label: String,
+    placeholder: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    password: Boolean = false,
+    visible: Boolean = false,
+    onToggleVisible: () -> Unit = {},
+    keyboardType: KeyboardType = if (password) KeyboardType.Password else KeyboardType.Text,
+) {
     Text(label, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(5.dp))
     OutlinedTextField(
@@ -498,6 +535,7 @@ private fun AuthField(label: String, placeholder: String, value: String, onValue
         modifier = Modifier.fillMaxWidth(),
         placeholder = { Text(placeholder) },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         shape = RoundedCornerShape(13.dp),
         visualTransformation = if (password && !visible) PasswordVisualTransformation() else VisualTransformation.None,
         trailingIcon = if (password) ({
@@ -585,7 +623,8 @@ private fun HomeScreen(
                         model = artwork.imageUrl,
                         contentDescription = artwork.title,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
+                        alignment = artworkFocusAlignment(artwork.focusX, artwork.focusY),
+                        modifier = Modifier.fillMaxSize().background(Color(0xFFE9E3DA)),
                     )
                     Text(
                         text = formatArtworkDate(payload.date),
@@ -998,6 +1037,7 @@ private fun CalendarDay(
                     model = artwork.imageUrl,
                     contentDescription = "Картина за ${date.dayOfMonth} число",
                     contentScale = ContentScale.Crop,
+                    alignment = artworkFocusAlignment(artwork.focusX, artwork.focusY),
                     modifier = Modifier.fillMaxSize(),
                     alpha = if (isFuture) 0.28f else 1f,
                 )
@@ -1029,17 +1069,41 @@ private fun GalleryScreen(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf("Все") }
-    var selectedAuthorId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedOptionId by rememberSaveable { mutableStateOf<String?>(null) }
     val allItems = state.payload?.gallery.orEmpty()
     val authors = allItems
         .distinctBy { it.artistId }
         .sortedBy { it.artist }
-    val effectiveArtistFilter = artistFilter ?: selectedAuthorId
+    val externalTag = tagFilter?.let { id ->
+        allItems.asSequence().flatMap { it.tags.asSequence() }.firstOrNull { it.id == id }
+    }
+    LaunchedEffect(tagFilter, artistFilter, externalTag?.type) {
+        when {
+            artistFilter != null -> selectedCategory = "Автор"
+            externalTag != null -> selectedCategory = categoryForTagType(externalTag.type)
+        }
+        selectedOptionId = null
+    }
+    val categoryTagType = tagTypeForCategory(selectedCategory)
+    val tagOptions = if (categoryTagType == null) emptyList() else allItems
+        .asSequence()
+        .flatMap { it.tags.asSequence() }
+        .filter { it.type == categoryTagType }
+        .distinctBy { it.id }
+        .sortedBy { it.name }
+        .toList()
+    val countryOptions = allItems.map { it.country }.filter { it.isNotBlank() }.distinct().sorted()
+    val centuryOptions = allItems.mapNotNull { it.year.toIntOrNull()?.let(::centuryOf) }.distinct().sorted()
+    val effectiveArtistFilter = artistFilter ?: selectedOptionId.takeIf { selectedCategory == "Автор" }
+    val effectiveTagFilter = tagFilter ?: selectedOptionId.takeIf { categoryTagType != null }
+    val effectiveCountryFilter = selectedOptionId.takeIf { selectedCategory == "Страна" }
+    val effectiveCenturyFilter = selectedOptionId?.toIntOrNull().takeIf { selectedCategory == "Век" }
     val items = allItems.filter { artwork ->
-        (tagFilter == null || artwork.tags.any { it.id == tagFilter }) &&
+        (effectiveTagFilter == null || artwork.tags.any { it.id == effectiveTagFilter }) &&
             (effectiveArtistFilter == null || artwork.artistId == effectiveArtistFilter) &&
-            (query.isBlank() || listOf(artwork.title, artwork.artist, artwork.year).any { it.contains(query, ignoreCase = true) } || artwork.tags.any { it.name.contains(query, ignoreCase = true) }) &&
-            categoryMatches(artwork, selectedCategory)
+            (effectiveCountryFilter == null || artwork.country == effectiveCountryFilter) &&
+            (effectiveCenturyFilter == null || artwork.year.toIntOrNull()?.let(::centuryOf) == effectiveCenturyFilter) &&
+            (query.isBlank() || listOf(artwork.title, artwork.artist, artwork.year).any { it.contains(query, ignoreCase = true) } || artwork.tags.any { it.name.contains(query, ignoreCase = true) })
     }
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 20.dp),
@@ -1071,15 +1135,16 @@ private fun GalleryScreen(
                         .background(if (selectedCategory == category) Color(0xFF082C58) else Color(0xFFF0EEEA), RoundedCornerShape(22.dp))
                         .clickable {
                             selectedCategory = category
-                            if (category != "Автор") selectedAuthorId = null
+                            selectedOptionId = null
+                            onClearFilter()
                         }
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                 )
             }
         }
-        if (selectedCategory == "Автор") {
+        if (selectedCategory != "Все") {
             Text(
-                text = "Выберите автора",
+                text = "Выберите ${categoryObjectName(selectedCategory)}",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color(0xFF5F5B58),
@@ -1087,32 +1152,68 @@ private fun GalleryScreen(
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
                     FilterChoiceChip(
-                        text = "Все авторы",
-                        selected = effectiveArtistFilter == null,
+                        text = allOptionsLabel(selectedCategory),
+                        selected = effectiveArtistFilter == null && effectiveTagFilter == null && effectiveCountryFilter == null && effectiveCenturyFilter == null,
                         onClick = {
-                            selectedAuthorId = null
+                            selectedOptionId = null
                             onClearFilter()
                         },
                     )
                 }
-                items(authors, key = { it.artistId }) { artwork ->
-                    FilterChoiceChip(
-                        text = artwork.artist,
-                        selected = effectiveArtistFilter == artwork.artistId,
-                        onClick = {
-                            onClearFilter()
-                            selectedAuthorId = artwork.artistId
-                        },
-                    )
+                if (selectedCategory == "Автор") {
+                    items(authors, key = { "artist-${it.artistId}" }) { artwork ->
+                        FilterChoiceChip(
+                            text = artwork.artist,
+                            selected = effectiveArtistFilter == artwork.artistId,
+                            onClick = {
+                                onClearFilter()
+                                selectedOptionId = artwork.artistId
+                            },
+                        )
+                    }
+                } else if (categoryTagType != null) {
+                    items(tagOptions, key = { "tag-${it.id}" }) { tag ->
+                        FilterChoiceChip(
+                            text = tag.name,
+                            selected = effectiveTagFilter == tag.id,
+                            onClick = {
+                                onClearFilter()
+                                selectedOptionId = tag.id
+                            },
+                        )
+                    }
+                } else if (selectedCategory == "Страна") {
+                    items(countryOptions, key = { "country-$it" }) { country ->
+                        FilterChoiceChip(
+                            text = country,
+                            selected = effectiveCountryFilter == country,
+                            onClick = {
+                                onClearFilter()
+                                selectedOptionId = country
+                            },
+                        )
+                    }
+                } else if (selectedCategory == "Век") {
+                    items(centuryOptions, key = { "century-$it" }) { century ->
+                        FilterChoiceChip(
+                            text = centuryLabel(century),
+                            selected = effectiveCenturyFilter == century,
+                            onClick = {
+                                onClearFilter()
+                                selectedOptionId = century.toString()
+                            },
+                        )
+                    }
                 }
             }
         }
-        if (tagFilter != null || effectiveArtistFilter != null) {
+        if (effectiveTagFilter != null || effectiveArtistFilter != null || effectiveCountryFilter != null || effectiveCenturyFilter != null) {
             val activeFilterName = effectiveArtistFilter?.let { id ->
                 allItems.firstOrNull { it.artistId == id }?.artist
-            } ?: tagFilter?.let { id ->
+            } ?: effectiveTagFilter?.let { id ->
                 allItems.asSequence().flatMap { it.tags.asSequence() }.firstOrNull { it.id == id }?.name
-            }
+            } ?: effectiveCountryFilter
+                ?: effectiveCenturyFilter?.let(::centuryLabel)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = activeFilterName?.let { "Фильтр: $it" } ?: "Включён фильтр",
@@ -1121,7 +1222,7 @@ private fun GalleryScreen(
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = {
-                    selectedAuthorId = null
+                    selectedOptionId = null
                     onClearFilter()
                 }) { Text("Сбросить") }
             }
@@ -1206,12 +1307,41 @@ private fun FavoritesScreen(
     }
 }
 
-private fun categoryMatches(artwork: ArtworkCard, category: String): Boolean = when (category) {
-    "Жанр" -> artwork.tags.any { it.type == "genre" }
-    "Стиль" -> artwork.tags.any { it.type == "style" }
-    "Страна" -> artwork.tags.any { it.type == "collection" }
-    "Век" -> artwork.tags.any { it.type == "period" }
-    else -> true
+private fun tagTypeForCategory(category: String): String? = when (category) {
+    "Жанр" -> "genre"
+    "Стиль" -> "style"
+    else -> null
+}
+
+private fun categoryForTagType(type: String): String = when (type) {
+    "genre" -> "Жанр"
+    "style" -> "Стиль"
+    else -> "Все"
+}
+
+private fun categoryObjectName(category: String): String = when (category) {
+    "Автор" -> "автора"
+    "Жанр" -> "жанр"
+    "Стиль" -> "стиль"
+    "Страна" -> "страну"
+    "Век" -> "век"
+    else -> "значение"
+}
+
+private fun allOptionsLabel(category: String): String = when (category) {
+    "Автор" -> "Все авторы"
+    "Жанр" -> "Все жанры"
+    "Стиль" -> "Все стили"
+    "Страна" -> "Все страны"
+    "Век" -> "Все века"
+    else -> "Все"
+}
+
+private fun centuryOf(year: Int): Int = ((year - 1) / 100) + 1
+
+private fun centuryLabel(century: Int): String {
+    val roman = listOf("", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX", "XXI")
+    return "${roman.getOrNull(century) ?: century.toString()} век"
 }
 
 @Composable
@@ -1279,6 +1409,28 @@ private fun GalleryHeader(title: String, gridMode: Boolean, onToggleGrid: () -> 
     }
 }
 
+private fun artworkFocusAlignment(focusX: Float, focusY: Float): Alignment =
+    FocalPointAlignment(focusX.coerceIn(0f, 1f), focusY.coerceIn(0f, 1f))
+
+private data class FocalPointAlignment(
+    val focusX: Float,
+    val focusY: Float,
+) : Alignment {
+    override fun align(size: IntSize, space: IntSize, layoutDirection: LayoutDirection): IntOffset =
+        IntOffset(
+            x = focusedOffset(contentSize = size.width, viewportSize = space.width, focus = focusX),
+            y = focusedOffset(contentSize = size.height, viewportSize = space.height, focus = focusY),
+        )
+
+    private fun focusedOffset(contentSize: Int, viewportSize: Int, focus: Float): Int {
+        if (contentSize <= viewportSize) return (viewportSize - contentSize) / 2
+
+        return (viewportSize / 2f - contentSize * focus)
+            .roundToInt()
+            .coerceIn(viewportSize - contentSize, 0)
+    }
+}
+
 @Composable
 private fun ArtworkGridCard(artwork: ArtworkCard, onOpen: () -> Unit, onFavoriteToggle: () -> Unit) {
     Card(
@@ -1292,6 +1444,7 @@ private fun ArtworkGridCard(artwork: ArtworkCard, onOpen: () -> Unit, onFavorite
                 model = artwork.imageUrl,
                 contentDescription = artwork.title,
                 contentScale = ContentScale.Crop,
+                alignment = artworkFocusAlignment(artwork.focusX, artwork.focusY),
                 modifier = Modifier.fillMaxWidth().height(174.dp),
             )
             Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
@@ -1331,11 +1484,14 @@ private fun ArtworkGridCard(artwork: ArtworkCard, onOpen: () -> Unit, onFavorite
                 TextButton(
                     onClick = onFavoriteToggle,
                     contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier.size(36.dp).align(Alignment.BottomEnd),
+                    modifier = Modifier
+                        .size(52.dp)
+                        .align(Alignment.BottomEnd)
+                        .background(Color(0xFFF5F2ED), CircleShape),
                 ) {
                     FavoriteIcon(
                         isFavorite = artwork.isFavorite,
-                        modifier = Modifier.size(25.dp),
+                        modifier = Modifier.size(32.dp),
                         tint = if (artwork.isFavorite) AccentRed else Color(0xFF777777),
                     )
                 }
@@ -1519,7 +1675,7 @@ private fun DetailScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -1548,11 +1704,12 @@ private fun DetailScreen(
             AsyncImage(
                 model = artwork.imageUrl,
                 contentDescription = artwork.title,
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1.45f)
                     .clip(RoundedCornerShape(18.dp))
+                    .background(Color(0xFFE9E3DA))
                     .clickable { fullScreenImage = true },
             )
         }
@@ -1685,6 +1842,7 @@ private fun ArtworkHeroCard(
                 model = artwork.imageUrl,
                 contentDescription = artwork.title,
                 contentScale = ContentScale.Crop,
+                alignment = artworkFocusAlignment(artwork.focusX, artwork.focusY),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(220.dp)
@@ -1743,6 +1901,7 @@ private fun LazyItemScope.ArtworkMiniCard(
                 model = artwork.imageUrl,
                 contentDescription = artwork.title,
                 contentScale = ContentScale.Crop,
+                alignment = artworkFocusAlignment(artwork.focusX, artwork.focusY),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(120.dp)
@@ -1778,6 +1937,7 @@ private fun ArtworkRow(
                 model = artwork.imageUrl,
                 contentDescription = artwork.title,
                 contentScale = ContentScale.Crop,
+                alignment = artworkFocusAlignment(artwork.focusX, artwork.focusY),
                 modifier = Modifier
                     .height(84.dp)
                     .weight(0.28f)
@@ -1792,10 +1952,16 @@ private fun ArtworkRow(
                 }
             }
             if (onFavoriteToggle != null) {
-                Button(onClick = onFavoriteToggle, modifier = Modifier.weight(0.16f)) {
+                TextButton(
+                    onClick = onFavoriteToggle,
+                    modifier = Modifier
+                        .size(54.dp)
+                        .background(Color(0xFF082C58), CircleShape),
+                    contentPadding = PaddingValues(0.dp),
+                ) {
                     FavoriteIcon(
                         isFavorite = artwork.isFavorite,
-                        modifier = Modifier.size(21.dp),
+                        modifier = Modifier.size(30.dp),
                         tint = Color.White,
                     )
                 }
@@ -2099,18 +2265,24 @@ private suspend fun saveArtwork(
     artwork: ArtworkCard,
     format: ArtworkFormat,
 ): Boolean = withContext(Dispatchers.IO) {
+    var pendingUri: android.net.Uri? = null
     runCatching {
         val request = ImageRequest.Builder(context)
             .data(artwork.imageUrl)
             .allowHardware(false)
             .build()
-        val drawable = ImageLoader(context).execute(request).drawable as? BitmapDrawable
-            ?: error("Image is not a bitmap")
-        val bitmap = drawable.bitmap
-        val fileName = artwork.title
+        val drawable = ImageLoader(context).execute(request).drawable
+            ?: error("Image could not be loaded")
+        // Coil may return vector/transition/custom drawables, not only
+        // BitmapDrawable. Converting the rendered drawable makes saving work
+        // for every image type supported by the application.
+        val bitmap = drawable.toBitmap()
+        val safeTitle = artwork.title
             .lowercase(Locale.getDefault())
             .replace(Regex("[^a-zа-яё0-9]+"), "-")
-            .trim('-') + ".${format.extension}"
+            .trim('-')
+            .ifBlank { "daily-canvas-${artwork.id}" }
+        val fileName = "$safeTitle.${format.extension}"
         val compressFormat = when (format) {
             ArtworkFormat.JPG -> Bitmap.CompressFormat.JPEG
             ArtworkFormat.PNG -> Bitmap.CompressFormat.PNG
@@ -2126,18 +2298,22 @@ private suspend fun saveArtwork(
             }
             val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
                 ?: error("Cannot create media file")
+            pendingUri = uri
             context.contentResolver.openOutputStream(uri)?.use { stream ->
                 check(bitmap.compress(compressFormat, 95, stream))
             } ?: error("Cannot open media file")
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            context.contentResolver.update(uri, values, null, null)
+            check(context.contentResolver.update(uri, values, null, null) == 1)
+            pendingUri = null
         } else {
             val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Daily Canvas").apply { mkdirs() }
             FileOutputStream(File(directory, fileName)).use { stream ->
                 check(bitmap.compress(compressFormat, 95, stream))
             }
         }
+    }.onFailure {
+        pendingUri?.let { uri -> runCatching { context.contentResolver.delete(uri, null, null) } }
     }.isSuccess
 }
 

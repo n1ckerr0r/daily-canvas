@@ -253,7 +253,7 @@ func (s *Store) GetByID(ctx context.Context, userID string, artworkID string) (a
 
 func (s *Store) GetCalendar(ctx context.Context, userID string, from time.Time, to time.Time) ([]artwork.CalendarItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT history.assigned_on, a.id, a.image_path
+		SELECT history.assigned_on, a.id, a.image_path, a.focus_x, a.focus_y
 		FROM daily_artwork_assignments history
 		JOIN artworks a ON a.id = history.artwork_id
 		WHERE history.user_id = $1 AND history.assigned_on BETWEEN $2 AND $3
@@ -267,7 +267,7 @@ func (s *Store) GetCalendar(ctx context.Context, userID string, from time.Time, 
 	items := make([]artwork.CalendarItem, 0)
 	for rows.Next() {
 		var value artwork.CalendarItem
-		if err := rows.Scan(&value.Date, &value.ArtworkID, &value.ImagePath); err != nil {
+		if err := rows.Scan(&value.Date, &value.ArtworkID, &value.ImagePath, &value.FocusX, &value.FocusY); err != nil {
 			return nil, err
 		}
 		items = append(items, value)
@@ -374,7 +374,7 @@ func (s *Store) List(ctx context.Context, userID string, sort favorite.Sort) ([]
 	query := `
 		SELECT
 			a.id, a.title, a.artist_id, a.artist_name, a.country, a.collection,
-			a.year_value, a.year_label, a.image_path, a.description, a.facts, a.published_on,
+			a.year_value, a.year_label, a.image_path, a.focus_x, a.focus_y, a.description, a.facts, a.published_on,
 			TRUE AS is_favorite, f.added_at
 		FROM favorites f
 		JOIN artworks a ON a.id = f.artwork_id
@@ -402,6 +402,8 @@ func (s *Store) List(ctx context.Context, userID string, sort favorite.Sort) ([]
 			&value.Artwork.YearValue,
 			&value.Artwork.YearLabel,
 			&value.Artwork.ImagePath,
+			&value.Artwork.FocusX,
+			&value.Artwork.FocusY,
 			&value.Artwork.Description,
 			pq.Array(&rawFacts),
 			&value.Artwork.PublishedOn,
@@ -450,6 +452,8 @@ func (s *Store) listArtworks(ctx context.Context, userID string, query string, a
 			&item.YearValue,
 			&item.YearLabel,
 			&item.ImagePath,
+			&item.FocusX,
+			&item.FocusY,
 			&item.Description,
 			pq.Array(&rawFacts),
 			&item.PublishedOn,
@@ -508,7 +512,7 @@ func baseArtworkQuery(suffix string) string {
 	return `
 		SELECT
 			a.id, a.title, a.artist_id, a.artist_name, a.country, a.collection,
-			a.year_value, a.year_label, a.image_path, a.description, a.facts, a.published_on,
+			a.year_value, a.year_label, a.image_path, a.focus_x, a.focus_y, a.description, a.facts, a.published_on,
 			COALESCE(f.artwork_id IS NOT NULL, FALSE) AS is_favorite
 		FROM artworks a
 		LEFT JOIN favorites f

@@ -34,9 +34,26 @@ const elements = {
   authError: document.querySelector("#auth-error"),
   authSubmit: document.querySelector("#auth-submit"),
   authToggle: document.querySelector("#auth-toggle"),
+  appError: document.querySelector("#app-error"),
 };
 
 elements.apiBaseUrl.textContent = apiBaseUrl;
+
+const apiErrorMessage = (status, code) => {
+  const messages = {
+    invalid_email: "Введите корректный адрес электронной почты.",
+    invalid_credentials: "Неверный email или пароль.",
+    email_taken: "Аккаунт с таким email уже существует.",
+    unauthorized: "Сессия истекла. Войдите снова.",
+    invalid_token: "Сессия истекла. Войдите снова.",
+    not_found: "Запрошенные данные не найдены.",
+    bad_request: "Проверьте введённые данные.",
+    internal_error: "Сервер временно не может выполнить запрос. Попробуйте позже.",
+  };
+  if (messages[code]) return messages[code];
+  if (status >= 500) return "Сервер временно недоступен. Попробуйте позже.";
+  return "Не удалось выполнить запрос. Попробуйте ещё раз.";
+};
 
 const request = async (path, options = {}) => {
   const token = sessionStorage.getItem("dailycanvas_access_token");
@@ -44,10 +61,18 @@ const request = async (path, options = {}) => {
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) },
     ...options,
   });
-  if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
-  }
-  return response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(apiErrorMessage(response.status, payload.code));
+  return payload;
+};
+
+const showAppError = (error) => {
+  elements.appError.textContent = error?.message || "Произошла ошибка. Попробуйте ещё раз.";
+  elements.appError.classList.add("visible");
+};
+const clearAppError = () => {
+  elements.appError.textContent = "";
+  elements.appError.classList.remove("visible");
 };
 
 const setAuthMode = (registerMode) => {
@@ -68,10 +93,14 @@ elements.authForm.addEventListener("submit", async (event) => {
   const email = elements.authEmail.value.trim();
   const password = elements.authPassword.value;
   elements.authError.textContent = "";
+  if (!elements.authEmail.checkValidity()) {
+    elements.authError.textContent = "Введите корректный email, например name@example.com";
+    return;
+  }
   try {
     const response = await fetch(`${apiBaseUrl}/auth/${state.registerMode ? "register" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.message || "Не удалось авторизоваться");
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(apiErrorMessage(response.status, payload.code));
     sessionStorage.setItem("dailycanvas_access_token", payload.accessToken);
     sessionStorage.setItem("dailycanvas_refresh_token", payload.refreshToken);
     hideAuth();
@@ -304,6 +333,9 @@ document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
 
+  clearAppError();
+  try {
+
   if (button.dataset.view) {
     state.view = button.dataset.view;
     render();
@@ -349,6 +381,9 @@ document.addEventListener("click", async (event) => {
       },
     });
   }
+  } catch (error) {
+    showAppError(error);
+  }
 });
 
 elements.searchInput.addEventListener("input", (event) => {
@@ -356,7 +391,7 @@ elements.searchInput.addEventListener("input", (event) => {
   renderGallery();
 });
 
-elements.refreshButton.addEventListener("click", () => refresh().catch((error) => showAuth(error.message)));
+elements.refreshButton.addEventListener("click", () => refresh().catch(showAppError));
 
 if (!sessionStorage.getItem("dailycanvas_access_token")) {
   showAuth();

@@ -27,6 +27,8 @@ type Artwork struct {
 	Year        int      `json:"year"`
 	YearLabel   string   `json:"yearLabel"`
 	Image       string   `json:"image"`
+	FocusX      float64  `json:"focusX"`
+	FocusY      float64  `json:"focusY"`
 	Description string   `json:"description"`
 	Facts       []string `json:"facts"`
 	Tags        []Tag    `json:"tags"`
@@ -80,8 +82,8 @@ func Sync(ctx context.Context, db *sql.DB, catalogPath, imagesDir string) error 
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO artworks (
 				id, title, artist_id, artist_name, country, collection,
-				year_value, year_label, image_path, description, facts, published_on, active
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, TRUE)
+				year_value, year_label, image_path, focus_x, focus_y, description, facts, published_on, active
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_DATE, TRUE)
 			ON CONFLICT (id) DO UPDATE SET
 				title = EXCLUDED.title,
 				artist_id = EXCLUDED.artist_id,
@@ -91,11 +93,13 @@ func Sync(ctx context.Context, db *sql.DB, catalogPath, imagesDir string) error 
 				year_value = EXCLUDED.year_value,
 				year_label = EXCLUDED.year_label,
 				image_path = EXCLUDED.image_path,
+				focus_x = EXCLUDED.focus_x,
+				focus_y = EXCLUDED.focus_y,
 				description = EXCLUDED.description,
 				facts = EXCLUDED.facts,
 				active = TRUE
 		`, item.ID, item.Title, item.ArtistID, item.ArtistName, item.Country, item.Collection,
-			item.Year, item.YearLabel, item.Image, item.Description, pq.Array(item.Facts))
+			item.Year, item.YearLabel, item.Image, item.FocusX, item.FocusY, item.Description, pq.Array(item.Facts))
 		if err != nil {
 			return fmt.Errorf("upsert artwork %q: %w", item.ID, err)
 		}
@@ -130,6 +134,9 @@ func validateArtwork(item Artwork, imagesDir string) error {
 	}
 	if item.Collection != "russian" && item.Collection != "world" {
 		return fmt.Errorf("artwork %q has unsupported collection %q", item.ID, item.Collection)
+	}
+	if item.FocusX < 0 || item.FocusX > 1 || item.FocusY < 0 || item.FocusY > 1 {
+		return fmt.Errorf("artwork %q focus point must be within [0, 1]", item.ID)
 	}
 	if filepath.Base(item.Image) != item.Image {
 		return fmt.Errorf("artwork %q image must be a file name", item.ID)

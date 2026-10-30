@@ -44,6 +44,13 @@ data class CalendarItemDto(
     val date: String,
     @SerialName("artworkId") val artworkId: String,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
+)
+
+@Serializable
+data class ArtworkFocusPointDto(
+    val x: Float,
+    val y: Float,
 )
 
 @Serializable
@@ -51,8 +58,10 @@ data class ArtworkDetailDto(
     val id: String,
     val title: String,
     val artist: ArtistDto,
+    val country: String,
     val year: Int,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
     @SerialName("isFavorite") val isFavorite: Boolean? = null,
     val tags: List<TagDto> = emptyList(),
     val description: String,
@@ -65,8 +74,10 @@ data class ArtworkSummaryDto(
     val id: String,
     val title: String,
     val artist: ArtistDto,
+    val country: String,
     val year: Int,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
     @SerialName("isFavorite") val isFavorite: Boolean? = null,
     val tags: List<TagDto> = emptyList(),
 )
@@ -76,8 +87,10 @@ data class FavoriteArtworkDto(
     val id: String,
     val title: String,
     val artist: ArtistDto,
+    val country: String,
     val year: Int,
     @SerialName("imageUrl") val imageUrl: String,
+    @SerialName("focusPoint") val focusPoint: ArtworkFocusPointDto,
     @SerialName("isFavorite") val isFavorite: Boolean? = null,
     val tags: List<TagDto> = emptyList(),
 )

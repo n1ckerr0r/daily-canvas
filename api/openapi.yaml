@@ -625,10 +625,28 @@ components:
           example: Морской пейзаж
         type:
           $ref: '#/components/schemas/TagType'
+    ArtworkFocusPoint:
+      type: object
+      additionalProperties: false
+      required: [x, y]
+      description: Normalized point that must remain visible when the image is cropped.
+      properties:
+        x:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          example: 0.5
+        y:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          example: 0.35
     ArtworkSummary:
       type: object
       additionalProperties: false
-      required: [id, title, artist, year, imageUrl]
+      required: [id, title, artist, country, year, imageUrl, focusPoint]
       properties:
         id:
           type: string
@@ -638,6 +656,9 @@ components:
           example: Девятый вал
         artist:
           $ref: '#/components/schemas/Artist'
+        country:
+          type: string
+          example: Россия
         year:
           type: integer
           example: 1850
@@ -645,6 +666,8 @@ components:
           type: string
           format: uri
           example: https://cdn.example.com/artworks/ninth-wave.webp
+        focusPoint:
+          $ref: '#/components/schemas/ArtworkFocusPoint'
         isFavorite:
           type: boolean
         tags:
@@ -654,7 +677,7 @@ components:
     ArtworkDetail:
       type: object
       additionalProperties: false
-      required: [id, title, artist, year, imageUrl, description, facts, collection]
+      required: [id, title, artist, country, year, imageUrl, focusPoint, description, facts, collection]
       properties:
         id:
           type: string
@@ -664,6 +687,9 @@ components:
           example: Девятый вал
         artist:
           $ref: '#/components/schemas/Artist'
+        country:
+          type: string
+          example: Россия
         year:
           type: integer
           example: 1850
@@ -671,6 +697,8 @@ components:
           type: string
           format: uri
           example: https://cdn.example.com/artworks/ninth-wave.webp
+        focusPoint:
+          $ref: '#/components/schemas/ArtworkFocusPoint'
         isFavorite:
           type: boolean
         tags:
@@ -721,7 +749,7 @@ components:
     CalendarItem:
       type: object
       additionalProperties: false
-      required: [date, artworkId, imageUrl]
+      required: [date, artworkId, imageUrl, focusPoint]
       properties:
         date:
           type: string
@@ -734,6 +762,8 @@ components:
           type: string
           format: uri
           example: https://cdn.example.com/artworks/ninth-wave.webp
+        focusPoint:
+          $ref: '#/components/schemas/ArtworkFocusPoint'
     CalendarResponse:
       type: object
       additionalProperties: false
@@ -805,7 +835,7 @@ components:
     SearchArtworkItem:
       type: object
       additionalProperties: false
-      required: [id, title, artist, year, imageUrl, matchedBy]
+      required: [id, title, artist, year, imageUrl, focusPoint, matchedBy]
       properties:
         id:
           type: string
@@ -822,6 +852,8 @@ components:
           type: string
           format: uri
           example: https://cdn.example.com/artworks/ninth-wave.webp
+        focusPoint:
+          $ref: '#/components/schemas/ArtworkFocusPoint'
         isFavorite:
           type: boolean
         tags:
@@ -846,7 +878,7 @@ components:
     FavoriteArtworkItem:
       type: object
       additionalProperties: false
-      required: [id, title, artist, year, imageUrl, addedAt]
+      required: [id, title, artist, country, year, imageUrl, focusPoint, addedAt]
       properties:
         id:
           type: string
@@ -856,6 +888,9 @@ components:
           example: Девятый вал
         artist:
           $ref: '#/components/schemas/Artist'
+        country:
+          type: string
+          example: Россия
         year:
           type: integer
           example: 1850
@@ -863,6 +898,8 @@ components:
           type: string
           format: uri
           example: https://cdn.example.com/artworks/ninth-wave.webp
+        focusPoint:
+          $ref: '#/components/schemas/ArtworkFocusPoint'
         isFavorite:
           type: boolean
         tags:

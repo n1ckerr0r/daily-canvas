@@ -13,8 +13,10 @@ func artworkToDetail(item artwork.Artwork) openapi.ArtworkDetail {
 		Id:          item.ID,
 		Title:       item.Title,
 		Artist:      artistToAPI(item.Artist),
+		Country:     item.Country,
 		Year:        item.YearValue,
 		ImageUrl:    imageURL(item.ImagePath),
+		FocusPoint:  focusPointToAPI(item),
 		IsFavorite:  boolPtr(item.IsFavorite),
 		Tags:        tagsToAPI(item.Tags),
 		Description: item.Description,
@@ -30,13 +32,19 @@ func artworksToSummaries(items []artwork.Artwork) []openapi.ArtworkSummary {
 			Id:         item.ID,
 			Title:      item.Title,
 			Artist:     artistToAPI(item.Artist),
+			Country:    item.Country,
 			Year:       item.YearValue,
 			ImageUrl:   imageURL(item.ImagePath),
+			FocusPoint: focusPointToAPI(item),
 			IsFavorite: boolPtr(item.IsFavorite),
 			Tags:       tagsToAPI(item.Tags),
 		})
 	}
 	return result
+}
+
+func focusPointToAPI(item artwork.Artwork) openapi.ArtworkFocusPoint {
+	return openapi.ArtworkFocusPoint{X: item.FocusX, Y: item.FocusY}
 }
 
 func artistToAPI(item artwork.Artist) openapi.Artist {

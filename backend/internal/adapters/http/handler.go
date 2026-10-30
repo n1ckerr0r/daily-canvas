@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
-	"net/mail"
 	"time"
 
 	"github.com/lib/pq"
@@ -112,6 +112,7 @@ func (h Handler) SearchArtworks(w http.ResponseWriter, r *http.Request, params o
 			Artist:     artistToAPI(item.Artwork.Artist),
 			Year:       item.Artwork.YearValue,
 			ImageUrl:   imageURL(item.Artwork.ImagePath),
+			FocusPoint: focusPointToAPI(item.Artwork),
 			IsFavorite: boolPtr(item.Artwork.IsFavorite),
 			Tags:       tagsToAPI(item.Artwork.Tags),
 			MatchedBy:  matchFieldsToAPI(item.MatchedBy),
@@ -145,12 +146,19 @@ func (h Handler) GetArtworkById(w http.ResponseWriter, r *http.Request, artworkI
 }
 
 func (h Handler) LoginUser(w http.ResponseWriter, r *http.Request) {
-	body, err := decodeJSON[openapi.LoginRequest](r)
+	body, err := decodeJSON[struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}](r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid login request")
 		return
 	}
-	currentUser, hash, err := h.users.Credentials(r.Context(), string(body.Email))
+	if !auth.IsValidEmail(body.Email) {
+		writeError(w, http.StatusBadRequest, "invalid_email", "Provide a valid email address")
+		return
+	}
+	currentUser, hash, err := h.users.Credentials(r.Context(), body.Email)
 	if err != nil || h.auth.CheckPassword(hash, body.Password) != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Invalid email or password")
 		return
@@ -172,13 +180,21 @@ func (h Handler) LogoutUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) RegisterUser(w http.ResponseWriter, r *http.Request) {
-	body, err := decodeJSON[openapi.RegisterRequest](r)
+	body, err := decodeJSON[struct {
+		Email    string  `json:"email"`
+		Password string  `json:"password"`
+		Name     *string `json:"name"`
+	}](r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid registration request")
 		return
 	}
-	if _, err := mail.ParseAddress(string(body.Email)); err != nil || len(body.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "bad_request", "Provide a valid email and a password of at least 8 characters")
+	if !auth.IsValidEmail(body.Email) {
+		writeError(w, http.StatusBadRequest, "invalid_email", "Provide a valid email address")
+		return
+	}
+	if len(body.Password) < 8 {
+		writeError(w, http.StatusBadRequest, "bad_request", "Password must contain at least 8 characters")
 		return
 	}
 	hash, err := h.auth.HashPassword(body.Password)
@@ -190,7 +206,7 @@ func (h Handler) RegisterUser(w http.ResponseWriter, r *http.Request) {
 	if body.Name != nil {
 		name = *body.Name
 	}
-	currentUser, err := h.users.Register(r.Context(), string(body.Email), name, hash)
+	currentUser, err := h.users.Register(r.Context(), body.Email, name, hash)
 	if err != nil {
 		var pgErr *pq.Error
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -249,9 +265,10 @@ func (h Handler) GetCalendar(w http.ResponseWriter, r *http.Request, params open
 	responseItems := make([]openapi.CalendarItem, 0, len(items))
 	for _, item := range items {
 		responseItems = append(responseItems, openapi.CalendarItem{
-			Date:      apiDate(item.Date),
-			ArtworkId: item.ArtworkID,
-			ImageUrl:  imageURL(item.ImagePath),
+			Date:       apiDate(item.Date),
+			ArtworkId:  item.ArtworkID,
+			ImageUrl:   imageURL(item.ImagePath),
+			FocusPoint: openapi.ArtworkFocusPoint{X: item.FocusX, Y: item.FocusY},
 		})
 	}
 
@@ -281,8 +298,10 @@ func (h Handler) GetFavorites(w http.ResponseWriter, r *http.Request, params ope
 			Id:         item.Artwork.ID,
 			Title:      item.Artwork.Title,
 			Artist:     artistToAPI(item.Artwork.Artist),
+			Country:    item.Artwork.Country,
 			Year:       item.Artwork.YearValue,
 			ImageUrl:   imageURL(item.Artwork.ImagePath),
+			FocusPoint: focusPointToAPI(item.Artwork),
 			IsFavorite: boolPtr(item.Artwork.IsFavorite),
 			Tags:       tagsToAPI(item.Artwork.Tags),
 			AddedAt:    item.AddedAt,
@@ -562,7 +581,8 @@ func writeError(w http.ResponseWriter, status int, code string, message string) 
 }
 
 func writeInternalError(w http.ResponseWriter, err error) {
-	writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+	log.Printf("internal API error: %v", err)
+	writeError(w, http.StatusInternalServerError, "internal_error", "The server could not complete the request")
 }
 
 func apiDate(value time.Time) openapiTypes.Date {

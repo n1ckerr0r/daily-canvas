@@ -62,6 +62,16 @@ input {
 .auth-card input { height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); }
 .auth-card .primary-button { min-height: 48px; }
 .auth-error { min-height: 20px; color: var(--accent); font-size: 14px; }
+.app-error {
+  display: none;
+  padding: 12px 16px;
+  border: 1px solid rgba(183, 74, 62, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 239, 236, 0.96);
+  color: #8f3028;
+  line-height: 1.45;
+}
+.app-error.visible { display: block; }
 .link-button { border: 0; background: transparent; color: var(--navy); text-decoration: underline; cursor: pointer; padding: 8px; }
 
 .app-shell {

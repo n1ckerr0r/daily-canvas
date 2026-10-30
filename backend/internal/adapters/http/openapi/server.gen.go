@@ -119,25 +119,39 @@ type Artist struct {
 type ArtworkDetail struct {
 	Artist      Artist     `json:"artist"`
 	Collection  Collection `json:"collection"`
+	Country     string     `json:"country"`
 	Description string     `json:"description"`
 	Facts       []string   `json:"facts"`
-	Id          string     `json:"id"`
-	ImageUrl    string     `json:"imageUrl"`
-	IsFavorite  *bool      `json:"isFavorite,omitempty"`
-	Tags        *[]Tag     `json:"tags,omitempty"`
-	Title       string     `json:"title"`
-	Year        int        `json:"year"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	Id         string            `json:"id"`
+	ImageUrl   string            `json:"imageUrl"`
+	IsFavorite *bool             `json:"isFavorite,omitempty"`
+	Tags       *[]Tag            `json:"tags,omitempty"`
+	Title      string            `json:"title"`
+	Year       int               `json:"year"`
+}
+
+// ArtworkFocusPoint Normalized point that must remain visible when the image is cropped.
+type ArtworkFocusPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 // ArtworkSummary defines model for ArtworkSummary.
 type ArtworkSummary struct {
-	Artist     Artist `json:"artist"`
-	Id         string `json:"id"`
-	ImageUrl   string `json:"imageUrl"`
-	IsFavorite *bool  `json:"isFavorite,omitempty"`
-	Tags       *[]Tag `json:"tags,omitempty"`
-	Title      string `json:"title"`
-	Year       int    `json:"year"`
+	Artist  Artist `json:"artist"`
+	Country string `json:"country"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	Id         string            `json:"id"`
+	ImageUrl   string            `json:"imageUrl"`
+	IsFavorite *bool             `json:"isFavorite,omitempty"`
+	Tags       *[]Tag            `json:"tags,omitempty"`
+	Title      string            `json:"title"`
+	Year       int               `json:"year"`
 }
 
 // AuthResponse defines model for AuthResponse.
@@ -158,7 +172,10 @@ type AuthResponse struct {
 type CalendarItem struct {
 	ArtworkId string             `json:"artworkId"`
 	Date      openapi_types.Date `json:"date"`
-	ImageUrl  string             `json:"imageUrl"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	ImageUrl   string            `json:"imageUrl"`
 }
 
 // CalendarResponse defines model for CalendarResponse.
@@ -193,14 +210,18 @@ type FavoriteAddedResponse struct {
 
 // FavoriteArtworkItem defines model for FavoriteArtworkItem.
 type FavoriteArtworkItem struct {
-	AddedAt    time.Time `json:"addedAt"`
-	Artist     Artist    `json:"artist"`
-	Id         string    `json:"id"`
-	ImageUrl   string    `json:"imageUrl"`
-	IsFavorite *bool     `json:"isFavorite,omitempty"`
-	Tags       *[]Tag    `json:"tags,omitempty"`
-	Title      string    `json:"title"`
-	Year       int       `json:"year"`
+	AddedAt time.Time `json:"addedAt"`
+	Artist  Artist    `json:"artist"`
+	Country string    `json:"country"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint `json:"focusPoint"`
+	Id         string            `json:"id"`
+	ImageUrl   string            `json:"imageUrl"`
+	IsFavorite *bool             `json:"isFavorite,omitempty"`
+	Tags       *[]Tag            `json:"tags,omitempty"`
+	Title      string            `json:"title"`
+	Year       int               `json:"year"`
 }
 
 // FavoriteMutationRequest defines model for FavoriteMutationRequest.
@@ -311,7 +332,10 @@ type RegisterRequest struct {
 
 // SearchArtworkItem defines model for SearchArtworkItem.
 type SearchArtworkItem struct {
-	Artist     Artist             `json:"artist"`
+	Artist Artist `json:"artist"`
+
+	// FocusPoint Normalized point that must remain visible when the image is cropped.
+	FocusPoint ArtworkFocusPoint  `json:"focusPoint"`
 	Id         string             `json:"id"`
 	ImageUrl   string             `json:"imageUrl"`
 	IsFavorite *bool              `json:"isFavorite,omitempty"`
